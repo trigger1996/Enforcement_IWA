@@ -13,7 +13,7 @@ event_uc = ['o1', 'o2', 'uc']
 
 def main():
 
-    t_bts_2 = t_bts('src/opacity_iwa/iwa/IWA_4.2.yaml', ['1'], event_c, event_o, event_uc, event_uo)
+    t_bts_2 = t_bts('./opacity_iwa/iwa/IWA_4.3.yaml', ['1'], event_c, event_o, event_uc, event_uo)
 
     t_bts_2.construct_T_BTS()
 

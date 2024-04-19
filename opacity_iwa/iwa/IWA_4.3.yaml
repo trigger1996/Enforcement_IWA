@@ -1,0 +1,30 @@
+#!IWA         # commented
+name: IWA_4
+multi: true
+directed: true
+init: [u1]
+final: []
+graph:
+  nodes:
+    '1': {}
+    '2': {}
+    '3': {}
+    '4':
+      prop: !!set { secret: null }
+    '5': {}
+    '6': {}
+    '7':
+      prop: !!set { secret: null }
+
+  edges:
+  - ['1',  '2',  {event: a,  t_min: 1, t_max: 2}]
+  - ['2',  '3',  {event: o3, t_min: 1, t_max: 3.5}]
+  - ['1',  '7',  {event: o3, t_min: 3, t_max: 6}]
+
+  - ['3',  '4',  {event: a,  t_min: 1,   t_max: 2}]
+  - ['4',  '5',  {event: a,  t_min: 1.5, t_max: 2}]
+  - ['3',  '5',  {event: a,  t_min: 4,   t_max: 7}]
+  - ['5',  '6',  {event: b,  t_min: 1.5, t_max: 3}]
+  - ['5',  '7',  {event: uc, t_min: 1.5, t_max: 3}]
+  - ['6',  '4',  {event: o2, t_min: 3,   t_max: 4}]
+  - ['7',  '3',  {event: o1, t_min: 1,   t_max: 3.25}]

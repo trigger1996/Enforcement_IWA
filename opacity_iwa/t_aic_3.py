@@ -239,6 +239,7 @@ class t_bts():
 
                 z_state_t = self.unobservable_reach(current_state, policy_t)
 
+                # for debugging
                 if z_state_t == (('3', '5', '7'), (('a', (4, 7)),)):
                     debug_var = 3
 
@@ -277,6 +278,13 @@ class t_bts():
 
                         ur_list_current.append(z_state_t)
 
+                    # for debugging
+                    debug_state_t = (('3', '5', '7'), (('a', (2.5, 7)), ('b', (7, 10))))
+                    try:
+                        if z_state_t == debug_state_t or z_state_extended == debug_state_t:
+                            debug_var = 5
+                    except:
+                        pass
 
             # solving NX
             '''
@@ -294,6 +302,10 @@ class t_bts():
                 # obtaining NX for newly-added Z-states
                 if not (self.state_type(state_2_nx) == 'Z_state' and state_2_nx not in visited):
                     continue
+
+                # for debugging
+                if '7' in list(state_2_nx[0]):
+                    debug_var = 6
 
                 y_state_nx_star = self.observable_reach_star(state_2_nx, current_state)
                 for nx_w_observation in y_state_nx_star:
