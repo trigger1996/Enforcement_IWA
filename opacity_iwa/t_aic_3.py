@@ -8,8 +8,21 @@ from heapq import heappush, heappop
 from itertools import count
 from collections import Counter
 import functools
+from functools import cmp_to_key
 
 import matplotlib.pyplot as plt
+
+def sort_t_instant_w_attritubes(t1, t2):
+    if list(t1)[0] != list(t2)[0]:
+        if list(t1)[0] > list(t2)[0]:            # 如果数字不相等
+            return 1
+        else:
+            return -1
+    else:
+        if list(t1)[1] == 'closed':
+            return 1
+        else:
+            return -1
 
 def sort_timeslice(elem):
     return elem[0]
@@ -59,7 +72,16 @@ class t_bts():
             event = edge_t[2]['event']
             t_min = edge_t[2]['t_min']
             t_max = edge_t[2]['t_max']
-            self.iwa.add_edge(edge_t[0], edge_t[1], event=event, t_min=t_min, t_max=t_max)
+
+            if 'l_attr' in edge_t[2].keys():
+                l_attr = edge_t[2]['l_attr']                        # 2024.3.3 Added
+            else:
+                l_attr = 'closed'
+            if 'r_attr' in edge_t[2].keys():
+                r_attr = edge_t[2]['r_attr']                        # 默认左闭右开, 新的代码支持它可以调
+            else:
+                r_attr = 'opened'
+            self.iwa.add_edge(edge_t[0], edge_t[1], event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
 
         for _iter in source:
             self.init_state.append(_iter)
@@ -207,6 +229,15 @@ class t_bts():
                     [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree(B, source=current_node)
 
                     # remove all improper timing policies
+                    #
+                    # 2024.3.17
+                    # 在加入了区间开闭的判断后, 上方获取最大-最小时间节点, 以及这里判断哪些polcies不被考虑的子过程, 是否需要修改?
+                    # 这里我认为是不需要的
+                    # 因为删除policies的过程中, 如果根据最大-最小时间点的开闭来删除
+                    # 那么则可能删去多余的时间段
+                    # 不如全部当闭区间来处理, 下面再考虑单一的时间节点
+                    #
+                    # 所以最终决定暂不修改
                     policy_to_remove = []
                     for policy_t in sc_t_current:
                            for policy_index in list(policy_t):
@@ -350,11 +381,15 @@ class t_bts():
             event_t = policy_t[0]
             t_1 = policy_t[1][0]
             t_2 = policy_t[1][1]
+            #
+            # 20240318, Added
+            t_1_attr = policy_t[1][2]
+            t_2_attr = policy_t[1][3]
             if event_t not in policy.keys():
-                policy.update({event_t : [[t_1, t_2]]})
+                policy.update({event_t : [(t_1, t_2, t_1_attr, t_2_attr)]})                                 # {event_t : [[t_1, t_2]]}
             else:
                 t_list = policy[event_t]
-                t_list.append([t_1, t_2])
+                t_list.append((t_1, t_2, t_1_attr, t_2_attr))                                               # [t_1, t_2]
                 policy.update({event_t, t_list})
 
         return policy
@@ -370,11 +405,15 @@ class t_bts():
             event_t = policy_t[0]
             t_1 = policy_t[1][0]
             t_2 = policy_t[1][1]
+            #
+            # 20240318, Added
+            t_1_attr = policy_t[1][2]
+            t_2_attr = policy_t[1][3]
             if event_t not in policy_dict.keys():
-                policy_dict.update({event_t : [[t_1, t_2]]})
+                policy_dict.update({event_t : [(t_1, t_2, t_1_attr, t_2_attr)]})                           # [t_1, t_2]
             else:
                 t_list = policy_dict[event_t]
-                t_list.append([t_1, t_2])
+                t_list.append((t_1, t_2, t_1_attr, t_2_attr))                                              # [t_1, t_2]
                 policy_dict.update({event_t, t_list})
 
         return policy_dict
@@ -432,7 +471,7 @@ class t_bts():
                 # for debugging
                 if (event in event_list and event in event_uo) or (event in event_uo and event in event_uc):
                     t_min =  iwa.edge[start][end][0]['t_min']
-                    t_max = -iwa.edge[start][end][0]['t_max']          # 用负值，得到的最短距离就是最长距离
+                    t_max = -iwa.edge[start][end][0]['t_max']           # 用负值，得到的最短距离就是最长距离
                     G0.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
             except:
                 pass
@@ -449,10 +488,12 @@ class t_bts():
                 event = iwa.edge[start][end][0]['event']
                 t_min  = nx.shortest_path_length(G0, source, start, weight='t_min') + iwa.edge[start][end][0]['t_min']
                 t_max = -nx.shortest_path_length(G0, source, start, weight='t_max') + iwa.edge[start][end][0]['t_max']
+                l_attr = iwa.edge[start][end][0]['l_attr']              # 2024.3.3 Added
+                r_attr = iwa.edge[start][end][0]['r_attr']
             except:
                 pass
 
-            dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
+            dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
 
         # 到这里计算到的都是通过uo到达的最短路径
         # 那些可经由可达时间到达的点还没有做出来
@@ -471,8 +512,10 @@ class t_bts():
         for edge_t in  dfs_tree.edges():
             t_min = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][0]['t_min']
             t_max = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][0]['t_max']
-            t_step.append(t_min)
-            t_step.append(t_max)
+            t_min_attr = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][0]['l_attr']
+            t_max_attr = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][0]['r_attr']
+            t_step.append(tuple([t_min, t_min_attr]))
+            t_step.append(tuple([t_max, t_max_attr]))
 
             # added, IMPORTANT
             # assign additional time instant to timeslice from controllable & observable event
@@ -482,27 +525,53 @@ class t_bts():
                 event_t_next = edge_t_next[2]['event']
                 t_min_next = edge_t_next[2]['t_min'] + t_min
                 t_max_next = edge_t_next[2]['t_max'] + t_max
+                t_min_attr_next = edge_t_next[2]['l_attr']
+                t_max_attr_next = edge_t_next[2]['r_attr']
 
                 if event_t_next in event_c and event_t_next in event_o:
-                    t_step.append(t_min_next)
-                    t_step.append(t_max_next)
+                    t_step.append(tuple([t_min_next, t_min_attr_next]))
+                    t_step.append(tuple([t_max_next, t_max_attr_next]))
 
         #
-        # for debugging
         # DONT FORGET to check the start point for the controllable & observable event
         for edge_t_next in self.iwa.out_edges(source, data=True):
             event_t_next = edge_t_next[2]['event']
             t_min_next = edge_t_next[2]['t_min']
             t_max_next = edge_t_next[2]['t_max']
+            t_min_attr_next = edge_t_next[2]['l_attr']
+            t_max_attr_next = edge_t_next[2]['r_attr']
 
             if event_t_next in event_c and event_t_next in event_o:
-                t_step.append(t_min_next)
-                t_step.append(t_max_next)
+                t_step.append(tuple([t_min_next, t_min_attr_next]))
+                t_step.append(tuple([t_max_next, t_max_attr_next]))
 
         t_step = list(set(t_step))      # 排序，去除多余元素
-        t_step.sort()
+        t_step.sort(key=cmp_to_key(sort_t_instant_w_attritubes))
         for i in range(0, t_step.__len__() - 1):
-            t_interval.append((t_step[i], t_step[i + 1]))
+            #
+            t_now =  list(t_step[i])[0]
+            t_next = list(t_step[i + 1])[0]
+            t_now_attr  = list(t_step[i])[1]                    # opened or closed
+            t_next_attr = list(t_step[i + 1])[1]
+            #
+            # Method 1 Dfstree来判断supervisor的区间
+            # if t_now == t_next:
+            #     continue
+            # else:
+            #     t_interval.append((t_now, t_next, t_now_attr, t_next_attr))              # (left_instant, r_instant, left_opened_or_closed, right_opened_or_closed)
+            #
+            # Method 2
+            # 其实我们会发现, 控制器的使能时间似乎和Dfstree的开闭没有一点关系
+            # 考虑初稿论文的例子, dfstree_1在5和6的时候都是对应开区间, 但是如果按照这个方法，选择[3, 5), (5, 6)而不考虑5, 那么其实在5的时候对应6的点也是能到的
+            #
+            # CRITICAL
+            # 其实倒不如考虑控制器对应时间在实数域R上的唯一性
+            # 统一考虑左闭右开区间
+            if t_now == t_next:
+                continue
+            else:
+                t_interval.append((t_now, t_next, 'closed', 'opened'))
+
         #t_interval.sort(key=sort_timeslice)
 
         return t_interval
@@ -609,27 +678,128 @@ class t_bts():
                     t_interval_to_merge = t_interval_list.pop()
                     t_min_1 = t_interval_to_merge[0]
                     t_max_1 = t_interval_to_merge[1]
+                    t_min_1_attr = t_interval_to_merge[2]
+                    t_max_1_attr = t_interval_to_merge[3]
 
                     for index in range(0, t_interval_conjuncted.__len__()):
+                        #
+                        t_interval_conjuncted[index] = list(t_interval_conjuncted[index])
+                        #
                         t_interval_prime = t_interval_conjuncted[index]
                         t_min_2 = t_interval_prime[0]
                         t_max_2 = t_interval_prime[1]
+                        t_min_2_attr = t_interval_prime[2]
+                        t_max_2_attr = t_interval_prime[3]
 
+                        #
                         # if the time interval is intersected
+                        #
                         '''
                             |--    |    --  --    |    --  --    |    --|
                                 t_min_1 --.... t_min_2 ....-- t_max_1
-                        
+
                             |--    |    --  --    |    --  --    |    --|
-                                t_min_2 --.... t_min_1 ....-- t_max_2                
-                        
+                                t_min_2 --.... t_min_1 ....-- t_max_2    
                         '''
-                        if (t_min_1 <= t_min_2 and t_min_2 <= t_max_1) or \
-                           (t_min_2 <= t_min_1 and t_min_1 <= t_max_2):
-                            t_interval_conjuncted[index][0] = min(t_min_1, t_min_2)
-                            t_interval_conjuncted[index][1] = max(t_max_1, t_max_2)
+                        # if (t_min_1 <= t_min_2 and t_min_2 <= t_max_1) or \
+                        #    (t_min_2 <= t_min_1 and t_min_1 <= t_max_2):
+                        #     t_interval_conjuncted[index][0] = min(t_min_1, t_min_2)
+                        #     t_interval_conjuncted[index][1] = max(t_max_1, t_max_2)
+                        # else:
+                        #     t_interval_conjuncted.append([t_min_1, t_max_1])
+                        if t_min_1 <= t_min_2 and t_min_2 <= t_max_1:
+
+                            if t_min_1 < t_min_2 and t_min_2 < t_max_1:
+                                '''
+                                    |--    |    --  --    |    --  --    |    --|
+                                        t_min_1 --.... t_min_2 ....-- t_max_1
+                                '''
+                                # case 1
+                                # strictly intersected
+                                t_interval_conjuncted[index][0] = t_min_1
+                                t_interval_conjuncted[index][2] = t_min_1_attr
+                                # right side of the interval should be carefully determined as opened or closed
+                                [t_interval_conjuncted[index][1],
+                                 t_interval_conjuncted[index][3]] = self.merge_right_interval(
+                                    t_max_1, t_max_2, t_max_1_attr, t_max_2_attr)
+
+                            elif t_min_1 == t_min_2:
+                                '''
+                                    |--    |              --  --    |    --|
+                                        t_min_1(t_min_2) .... --  t_max_1
+                                '''
+                                # case 2
+                                t_interval_conjuncted[index][0] = t_min_1
+                                if t_min_1_attr == 'closed' or t_min_2_attr == 'closed':
+                                    t_interval_conjuncted[index][2] = 'closed'
+                                else:
+                                    t_interval_conjuncted[index][2] = 'opened'
+                                [t_interval_conjuncted[index][1],
+                                 t_interval_conjuncted[index][3]] = self.merge_right_interval(
+                                    t_max_1, t_max_2, t_max_1_attr, t_max_2_attr)
+                            elif t_min_2 == t_max_1:
+                                '''
+                                    |--    |      --  --    |    --|
+                                        t_min_1 ....  --  t_max_1(t_min_2)
+                                '''
+                                # case 3
+                                # remember, it is conjunction not disjunction
+                                if t_min_2_attr == 'opened' and t_max_1_attr == 'opened':
+                                    t_interval_conjuncted.append((t_min_1, t_max_1, t_min_1_attr, t_max_1_attr))        # do nothing, REMEMBER, here we add not interval from t_interval_to_merge
+                                else:
+                                    t_interval_conjuncted[index][0] = t_min_1
+                                    t_interval_conjuncted[index][1] = t_max_2
+                                    t_interval_conjuncted[index][2] = t_min_1_attr
+                                    t_interval_conjuncted[index][3] = t_max_2_attr
+
+                        elif t_min_2 <= t_min_1 and t_min_1 <= t_max_2:
+
+                            if t_min_1 < t_min_2 and t_min_2 < t_max_1:
+                                '''
+                                    |--    |    --  --    |    --  --    |    --|
+                                        t_min_2 --.... t_min_1 ....-- t_max_2                
+                                '''
+                                # case 1
+                                # strictly intersected
+                                t_interval_conjuncted[index][0] = t_min_2
+                                t_interval_conjuncted[index][2] = t_min_2_attr
+                                # right side of the interval should be carefully determined as opened or closed
+                                [t_interval_conjuncted[index][1],
+                                 t_interval_conjuncted[index][3]] = self.merge_right_interval(
+                                    t_max_1, t_max_2, t_max_1_attr, t_max_2_attr)
+
+                            elif t_min_1 == t_min_2:
+                                '''
+                                    |--    |              --  --    |    --|
+                                        t_min_2(t_min_1) .... --  t_max_2
+                                '''
+                                # case 2
+                                t_interval_conjuncted[index][0] = t_min_2
+                                if t_min_1_attr == 'closed' or t_min_2_attr == 'closed':
+                                    t_interval_conjuncted[index][2] = 'closed'
+                                else:
+                                    t_interval_conjuncted[index][2] = 'opened'
+                                [t_interval_conjuncted[index][1],
+                                 t_interval_conjuncted[index][3]] = self.merge_right_interval(
+                                    t_max_1, t_max_2, t_max_1_attr, t_max_2_attr)
+                            elif t_min_1 == t_max_2:
+                                '''
+                                    |--    |      --  --    |    --|
+                                        t_min_2 ....  --  t_max_2(t_min_1)
+                                '''
+                                # case 3
+                                # remember, it is conjunction not disjunction
+                                if t_min_1_attr == 'opened' and t_max_2_attr == 'opened':
+                                    t_interval_conjuncted.append((t_min_1, t_max_1, t_min_1_attr, t_max_1_attr))        # do nothing, REMEMBER, here we add not interval from t_interval_to_merge
+                                else:
+                                    t_interval_conjuncted[index][0] = t_min_2
+                                    t_interval_conjuncted[index][1] = t_max_1
+                                    t_interval_conjuncted[index][2] = t_min_2_attr
+                                    t_interval_conjuncted[index][3] = t_max_1_attr
+
                         else:
-                            t_interval_conjuncted.append([t_min_1, t_max_1])
+                            t_interval_conjuncted.append((t_min_1, t_max_1, t_min_1_attr, t_max_1_attr))
+                        t_interval_conjuncted[index] = tuple(t_interval_conjuncted[index])
 
                 policy_dict.update({event_t: t_interval_conjuncted})
 
@@ -650,7 +820,9 @@ class t_bts():
             for t_interval in t_list:
                 t_min = t_interval[0]
                 t_max = t_interval[1]
-                policy.append((event_t, (t_min, t_max)))
+                t_min_attr = t_interval[2]
+                t_max_attr = t_interval[3]
+                policy.append((event_t, (t_min, t_max, t_min_attr, t_max_attr)))
 
         return tuple(policy)
 
@@ -720,11 +892,52 @@ class t_bts():
                         t_min_t =  dfs_tree.edge[parent][child][0]['t_min']
                         t_max_t =  dfs_tree.edge[parent][child][0]['t_max']
                         t_min_tc = list(sc_t)[1][0]
-                        t_max_tc = list(sc_t)[1][0]
-                        if ((event_t == event_c_t and t_min_t <= t_min_tc and self.is_interval_disjoint(t_min_t, t_max_t, t_min_tc, t_max_tc)) or
-                            (event_c_t in event_uc and event_c_t in event_uo)):
+                        t_max_tc = list(sc_t)[1][1]
+                        #
+                        t_min_t_attr = dfs_tree.edge[parent][child][0]['l_attr']
+                        t_max_t_attr = dfs_tree.edge[parent][child][0]['r_attr']
+                        try:
+                            t_min_tc_attr = list(sc_t)[1][2]
+                            t_max_tc_attr = list(sc_t)[1][3]
+                        except:
+                            # for debugging
+                            print("interval error ...")
+                            return
+                        #
+                        # 2024.3.17
+                        # 是不是t_max的影响都不大?
+                        #
+                        # if ((event_t == event_c_t and t_min_t <= t_min_tc and self.is_interval_disjoint(t_min_t, t_max_t, t_min_tc, t_max_tc)) or
+                        #     (event_c_t in event_uc and event_c_t in event_uo)):
+                        #     is_edge_reachable = True
+                        #     break
+                        # 判断1, 事件相关
+                        if event_t == event_c_t:
+                            # 判断2, 区间重合, 这里就要检查右区间的开闭了
+                            if not self.is_interval_disjoint(t_min_t, t_max_t, t_min_tc, t_max_tc, t_min_t_attr, t_max_t_attr, t_min_tc_attr, t_max_tc_attr):
+                                # 判断3, 区间开闭
+                                if t_min_t_attr == 'closed':
+                                    if t_min_tc_attr == 'closed' and t_min_t <= t_min_tc:
+                                            is_edge_reachable = True
+                                            break
+                                    elif t_min_tc_attr == 'opened' and t_min_t <= t_min_tc:
+                                        is_edge_reachable = True
+                                        break
+                                if t_min_t_attr == 'opened':
+                                    if t_min_tc_attr == 'closed' and t_min_t < t_min_tc:
+                                            is_edge_reachable = True
+                                            break
+                                    elif t_min_tc_attr == 'opened' and t_min_t <= t_min_tc:              # 这个是否可以<=?
+                                        is_edge_reachable = True
+                                        break
+
+
+                        elif event_c_t in event_uc and event_c_t in event_uo:
                             is_edge_reachable = True
                             break
+
+
+
                     if not is_edge_reachable:
                         continue
 
@@ -759,8 +972,8 @@ class t_bts():
         # obtain min-max time by DfsTree
         for current_state in current_y_state:
 
-            min_time_dict.update({current_state : 0})
-            max_time_dict.update({current_state : 0})
+            min_time_dict.update({current_state : [0, 'closed']})
+            max_time_dict.update({current_state : [0, 'closed']})                   # 啥都不干这个点是肯定可以呆的
 
             dfs_tree = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_state)
             if dfs_tree.node.__len__():
@@ -775,22 +988,56 @@ class t_bts():
                     event_c_t = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['event']
                     event_t_min = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_min']
                     event_t_max = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_max']
+                    event_t_min_attr = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['l_attr']
+                    event_t_max_attr = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['r_attr']
 
                     for policy_t in policy:
+                        policy_t_min  = policy_t[1][0]
+                        policy_t_min_attr = policy_t[1][2]
+
+
+                        # old gen codes
+                        # for debugging, DO NOT COMMENT
+                        try:
+                            if event_c_t in self.event_uo and \
+                               ((event_c_t == policy_t[0] and event_t_min >= policy_t[1][0]) or \
+                                (event_c_t in self.event_uc and event_c_t in self.event_uo)):
+                                # min-time
+                                if edge_end not in min_time_dict.keys():
+                                    #min_time_dict.update({edge_end : event_t_min})
+                                    pass
+                                elif min_time_dict[edge_end] > event_t_min:
+                                    #min_time_dict.update({edge_end: event_t_min})
+                                    pass
+
+                                # max-time
+                                if edge_end not in max_time_dict.keys():
+                                    #max_time_dict.update({edge_end : event_t_max})
+                                    pass
+                                elif max_time_dict[edge_end] < event_t_max:
+                                    #max_time_dict.update({edge_end: event_t_max})
+                                    pass
+                        except:
+                            pass
+                        # END OF DO NOT COMMENT
+
+                        #
+                        # 只要
                         if event_c_t in self.event_uo and \
-                           ((event_c_t == policy_t[0] and event_t_min >= policy_t[1][0]) or \
-                            (event_c_t in self.event_uc and event_c_t in self.event_uo)):
+                           ((event_c_t == policy_t[0] and event_t_min >= policy_t_min and policy_t_min_attr == 'closed') or \
+                            (event_c_t == policy_t[0] and event_t_min > policy_t_min and policy_t_min_attr == 'opened') or \
+                             (event_c_t in self.event_uc and event_c_t in self.event_uo)):                  # (event_c_t == policy_t[0] and event_t_min >= policy_t_min)
                             # min-time
                             if edge_end not in min_time_dict.keys():
-                                min_time_dict.update({edge_end : event_t_min})
-                            elif min_time_dict[edge_end] > event_t_min:
-                                    min_time_dict.update({edge_end: event_t_min})
+                                min_time_dict.update({edge_end : [event_t_min, event_t_min_attr]})
+                            elif min_time_dict[edge_end][0] > event_t_min:
+                                min_time_dict.update({edge_end: [event_t_min, event_t_min_attr]})
 
                             # max-time
                             if edge_end not in max_time_dict.keys():
-                                max_time_dict.update({edge_end : event_t_max})
-                            elif max_time_dict[edge_end] < event_t_max:
-                                    max_time_dict.update({edge_end: event_t_max})
+                                max_time_dict.update({edge_end : [event_t_max, event_t_max_attr]})
+                            elif max_time_dict[edge_end][0] < event_t_max:
+                                max_time_dict.update({edge_end: [event_t_max, event_t_max_attr]})
 
 
         # observable reach with policies
@@ -813,7 +1060,8 @@ class t_bts():
                 event_t     = edge_t[2]['event']
                 event_t_min = edge_t[2]['t_min']
                 event_t_max = edge_t[2]['t_max']
-
+                event_t_min_attr = edge_t[2]['l_attr']
+                event_t_max_attr = edge_t[2]['r_attr']
 
                 # event_t <- event correspond to the out edge of current node
                 # 1 event_t MUST be observable
@@ -821,32 +1069,70 @@ class t_bts():
                 #   event_t is controllable && event_t is picked in policy && the enabling time must identical to the observation time
                 if event_t in self.event_o and event_t in self.event_uc:
 
-                    event_t_min = event_t_min + min_time_dict[edge_start]
-                    event_t_max = event_t_max + max_time_dict[edge_start]
+                    event_t_min = event_t_min + min_time_dict[edge_start][0]
+                    event_t_max = event_t_max + max_time_dict[edge_start][0]
+
+                    #
+                    min_time_attr = min_time_dict[edge_start][1]
+                    max_time_attr = max_time_dict[edge_start][1]
+                    if min_time_attr == event_t_min_attr == 'closed':
+                        event_t_min_attr_prime = 'closed'
+                    else:
+                        event_t_min_attr_prime = 'opened'
+                    if max_time_attr == event_t_max_attr == 'closed':
+                        event_t_max_attr_prime = 'closed'
+                    else:
+                        event_t_max_attr_prime = 'opened'
 
                     if event_t not in nx_star_un_merged.keys():
-                        nx_star_un_merged.update({event_t : [(edge_end, (event_t_min, event_t_max))]})
+                        nx_star_un_merged.update({event_t : [(edge_end, (event_t_min, event_t_max, event_t_min_attr_prime, event_t_max_attr_prime))]})
                     else:
-                        nx_star_un_merged[event_t].append((edge_end, (event_t_min, event_t_max)))
+                        nx_star_un_merged[event_t].append((edge_end, (event_t_min, event_t_max, event_t_min_attr_prime, event_t_max_attr_prime)))
 
+                #
+                # 如果目标事件可观可控
+                # 那么需要同时考虑使能时间和可观时间, 这边先算出来, 然后后面拆
                 elif event_t in self.event_o and event_t in self.event_c and event_t in event_in_policy:
                     enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
                     enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
-
-                    event_t_min = event_t_min + min_time_dict[edge_start]
-                    event_t_max = event_t_max + max_time_dict[edge_start]
-
                     #
-                    # for debugging
-                    if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
-                        event_t_min = max(event_t_min, enabled_t_min)
-                        event_t_max = min(event_t_max, enabled_t_max)
+                    enabled_t_min_attr = self.get_policy_w_time(z_state)[event_t][0][2]
+                    enabled_t_max_attr = self.get_policy_w_time(z_state)[event_t][0][3]
 
-                        if event_t not in nx_star_un_merged.keys():
-                            nx_star_un_merged.update({event_t: [(edge_end, (event_t_min, event_t_max))]})
-                        else:
-                            nx_star_un_merged[event_t].append((edge_end, (event_t_min, event_t_max)))
+                    event_t_min = event_t_min + min_time_dict[edge_start][0]
+                    event_t_max = event_t_max + max_time_dict[edge_start][0]
 
+                    # 这里先算出来
+                    # 下面再拆开
+                    # if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
+                    #     event_t_min = max(event_t_min, enabled_t_min)
+                    #     event_t_max = min(event_t_max, enabled_t_max)
+                    #
+                    #     if event_t not in nx_star_un_merged.keys():
+                    #         nx_star_un_merged.update({event_t: [(edge_end, (event_t_min, event_t_max))]})
+                    #     else:
+                    #         nx_star_un_merged[event_t].append((edge_end, (event_t_min, event_t_max)))
+                    if not self.is_interval_disjoint(event_t_min, event_t_max, enabled_t_min, enabled_t_max, \
+                                                     event_t_min_attr, event_t_max_attr, enabled_t_min_attr, enabled_t_max_attr):
+                        if event_t_min <= enabled_t_min:
+                            if event_t_min == enabled_t_min and enabled_t_min_attr == 'opened':
+                                event_t_min_attr_prime = event_t_min_attr
+                                event_t_min_prime = event_t_min
+                            else:
+                                event_t_min_attr_prime = enabled_t_min_attr
+                                event_t_min_prime = enabled_t_min
+                        if event_t_max >= enabled_t_max:
+                            if event_t_max == enabled_t_max and enabled_t_max_attr == 'opened':
+                                event_t_max_attr_prime = event_t_max_attr
+                                event_t_max_prime = event_t_max
+                            else:
+                                event_t_max_attr_prime = enabled_t_max_attr
+                                event_t_max_prime = enabled_t_max
+                        if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
+                            if event_t not in nx_star_un_merged.keys():
+                                nx_star_un_merged.update({event_t: [(edge_end, (event_t_min_prime, event_t_max_prime, event_t_min_attr_prime, event_t_max_attr_prime))]})
+                            else:
+                                nx_star_un_merged[event_t].append((edge_end, (event_t_min_prime, event_t_max_prime, event_t_min_attr_prime, event_t_max_attr_prime)))
         '''
             nx_star: Data structure: 
             [ ((state_1, state_2, ...), (event_t_1, t_1, t_2)),
@@ -880,8 +1166,10 @@ class t_bts():
                 state_t = nx_star_un_merged[event_t][0][0]
                 t_min   = nx_star_un_merged[event_t][0][1][0]
                 t_max   = nx_star_un_merged[event_t][0][1][1]
+                t_min_attr   = nx_star_un_merged[event_t][0][1][2]
+                t_max_attr   = nx_star_un_merged[event_t][0][1][3]
 
-                nx_star.append((tuple(state_t), (event_t, (t_min, t_max))))
+                nx_star.append((tuple(state_t), (event_t, (t_min, t_max, t_min_attr, t_max_attr))))
             else:
                 '''
                     nx_temp: Data structure: 
@@ -895,15 +1183,17 @@ class t_bts():
 
                 # extract all time instant
                 for nx_w_time_t in nx_star_un_merged[event_t]:
-                    t_instant.append(nx_w_time_t[1][0])          # t_min
-                    t_instant.append(nx_w_time_t[1][1])          # t_max
+                    t_instant.append((nx_w_time_t[1][0], nx_w_time_t[1][2]))          # t_min
+                    t_instant.append((nx_w_time_t[1][1], nx_w_time_t[1][3]))          # t_max
                 t_instant = list(set(t_instant))
-                t_instant.sort()
+                t_instant.sort(key=cmp_to_key(sort_t_instant_w_attritubes))
 
                 # check all time instant for all reachable state
                 for i in range(0, t_instant.__len__() - 1):
-                    t_i      = t_instant[i]
-                    t_i_next = t_instant[i + 1]
+                    t_i      = t_instant[i][0]
+                    t_i_next = t_instant[i + 1][0]
+                    t_i_attr = t_instant[i][1]
+                    t_i_next_attr = t_instant[i + 1][1]
                     reachable_state = []
 
                     # merge / separated states within the same policy
@@ -911,14 +1201,20 @@ class t_bts():
                         state_t = nx_w_time_t[0]
                         t_min   = nx_w_time_t[1][0]
                         t_max   = nx_w_time_t[1][1]
-                        if t_i >= t_min and t_i < t_max:
+                        t_min_attr   = nx_w_time_t[1][2]
+                        t_max_attr   = nx_w_time_t[1][3]
+                        if t_i >= t_min and t_i <= t_max:
+                            if t_i == t_min and t_i_attr == 'closed' and t_min_attr == 'opened':
+                                continue
+                            if t_i_next == t_max and t_i_next_attr == 'opened' and t_max_attr == 'closed':      # TODO, correct?
+                                continue
                             reachable_state.append(state_t)
 
                     # sort reachable state
                     reachable_state = list(set(reachable_state))
                     reachable_state.sort()
 
-                    nx_temp.append((tuple(reachable_state), (event_t, (t_i, t_i_next))))
+                    nx_temp.append((tuple(reachable_state), (event_t, (t_i, t_i_next, t_i_attr, t_i_next_attr))))
 
                 nx_star = nx_star + nx_temp
 
@@ -955,14 +1251,34 @@ class t_bts():
                             if not self.state_type(ending_state_t) == 'Z_state':
                                 continue
 
-                            policy_prime     = self.get_policy_dict(z_state[1])
-                            policy_successor = self.get_policy_dict(ending_state_t[1])
+                            policy_prime     = self.get_policy_dict(z_state[1])                     # policy of state to check
+                            policy_successor = self.get_policy_dict(ending_state_t[1])              # policy of state as succesors of input state
 
                             try:
+                                #
+                                # check enabling time for each event
                                 for key_iter in list(policy_prime.keys()):
-                                    if policy_successor[key_iter][0][1] <= policy_prime[key_iter][0][1]:
+                                    # if policy_successor[key_iter][0][1] <= policy_prime[key_iter][0][1]:
+                                    #     is_all_successive_policy_ending_later = False
+                                    #     break
+                                    t_max_successor = policy_successor[key_iter][0][1]
+                                    t_max_prime     = policy_prime[key_iter][0][1]
+                                    t_max_successor_attr = policy_successor[key_iter][0][3]
+                                    t_max_prime_attr     = policy_prime[key_iter][0][3]
+                                    if t_max_prime > t_max_successor:
                                         is_all_successive_policy_ending_later = False
                                         break
+                                    if t_max_prime == t_max_successor and \
+                                            t_max_successor_attr == 'opened' and t_max_prime_attr == 'closed':
+                                        # 这个位置不太好想
+                                        # 当后继节点的ending time不允许包括这个时间点
+                                        # 但输入节点可以包括这个时间点
+                                        # 那么则说明后继节点结束得比输入节点早
+                                        is_all_successive_policy_ending_later = False
+                                        break
+
+
+
                             except:
                                 print("policy error in is_state_listed ...")
                                 is_all_successive_policy_ending_later = False
@@ -993,7 +1309,7 @@ class t_bts():
             if event_t in self.event_c and event_t in self.event_o:
                 is_no_controllable_observable_event = False
         if is_no_controllable_observable_event:
-            return  True
+            return True
 
         for event_t in policy.keys():
             # first check whether the event_t is shared && event_t is controllable and observable
@@ -1005,7 +1321,8 @@ class t_bts():
                 for t_interval in t_list:
                     for t_interval_prime in t_list_prime:
                         # if there exist a time interval that is shared
-                        if t_interval[0] == t_interval_prime[0] and t_interval[1] == t_interval_prime[1]:
+                        if t_interval[0] == t_interval_prime[0] and t_interval[1] == t_interval_prime[1] and \
+                            t_interval[2] == t_interval_prime[2] and t_interval[3] == t_interval_prime[3]:
                             is_identical = True
 
         return is_identical
@@ -1077,26 +1394,85 @@ class t_bts():
                                 t_list_1 = policy_state_t_dict[event_t]
                                 t_min_1 = t_list_1[0][0]
                                 t_max_1 = t_list_1[0][1]
+                                t_min_1_attr = t_list_1[0][2]
+                                t_max_1_attr = t_list_1[0][3]
                                 for t_interval in t_list_1:
                                     t_min_prime = t_interval[0]
                                     t_max_prime = t_interval[1]
-                                    if t_min_prime < t_min_1:
-                                        t_min_1 = t_min_prime
-                                    if t_max_prime > t_max_1:
-                                        t_max_1 = t_max_prime
+                                    t_min_prime_attr = t_interval[2]
+                                    t_max_prime_attr = t_interval[3]
+                                    #
+                                    # if t_min_prime < t_min_1:
+                                    #     t_min_1 = t_min_prime
+                                    if t_min_prime <= t_min_1 and t_min_1_attr == 'closed':
+                                        if t_min_prime < t_min_1 and t_min_prime_attr == 'closed':
+                                            t_min_1 = t_min_prime
+                                        elif t_min_prime < t_min_1 and t_min_prime_attr == 'opened':
+                                            t_min_1 = t_min_prime
+                                    elif t_min_prime <= t_min_1 and t_min_1_attr == 'opened':
+                                        if t_min_prime <= t_min_1 and t_min_prime_attr == 'closed':
+                                            t_min_1 = t_min_prime
+                                        elif t_min_prime < t_min_1 and t_min_prime_attr == 'opened':
+                                            t_min_1 = t_min_prime
+                                    #
+                                    # if t_max_prime > t_max_1:
+                                    #     t_max_1 = t_max_prime
+                                    if t_max_prime >= t_max_1 and t_min_1_attr == 'closed':
+                                        if t_max_prime > t_max_1 and t_max_1_attr == 'closed':
+                                            t_max_1 = t_max_prime
+                                        elif t_max_prime > t_max_1 and t_max_1_attr == 'opened':
+                                            t_max_1 = t_max_prime
+                                    elif t_max_prime >= t_max_1 and t_min_1_attr == 'opened':
+                                        if t_max_prime >= t_max_1 and t_max_1_attr == 'closed':
+                                            t_max_1 = t_max_prime
+                                        elif t_max_prime > t_max_1 and t_max_1_attr == 'opened':
+                                            t_max_1 = t_max_prime
 
                                 t_list_2 = policy_z_state_dict[event_t]
                                 t_min_2 = t_list_2[0][0]
                                 t_max_2 = t_list_2[0][1]
+                                t_min_2_attr = t_list_2[0][2]
+                                t_max_2_attr = t_list_2[0][3]
                                 for t_interval in t_list_2:
                                     t_min_prime = t_interval[0]
                                     t_max_prime = t_interval[1]
-                                    if t_min_prime < t_min_2:
-                                        t_min_2 = t_min_prime
-                                    if t_max_prime > t_max_2:
-                                        t_max_2 = t_max_prime
+                                    # if t_min_prime < t_min_2:
+                                    #     t_min_2 = t_min_prime
+                                    if t_min_prime <= t_min_2 and t_min_2_attr == 'closed':
+                                        if t_min_prime < t_min_2 and t_min_prime_attr == 'closed':
+                                            t_min_2 = t_min_prime
+                                        elif t_min_prime < t_min_2 and t_min_prime_attr == 'opened':
+                                            t_min_2 = t_min_prime
+                                    elif t_min_prime <= t_min_2 and t_min_2_attr == 'opened':
+                                        if t_min_prime <= t_min_2 and t_min_prime_attr == 'closed':
+                                            t_min_2 = t_min_prime
+                                        elif t_min_prime < t_min_2 and t_min_prime_attr == 'opened':
+                                            t_min_2 = t_min_prime
+                                    #
+                                    # if t_max_prime > t_max_2:
+                                    #     t_max_2 = t_max_prime
+                                    if t_max_prime >= t_max_2 and t_min_2_attr == 'closed':
+                                        if t_max_prime > t_max_2 and t_max_2_attr == 'closed':
+                                            t_max_2 = t_max_prime
+                                        elif t_max_prime > t_max_2 and t_max_2_attr == 'opened':
+                                            t_max_2 = t_max_prime
+                                    elif t_max_prime >= t_max_2 and t_min_2_attr == 'opened':
+                                        if t_max_prime >= t_max_2 and t_max_2_attr == 'closed':
+                                            t_max_2 = t_max_prime
+                                        elif t_max_prime > t_max_2 and t_max_2_attr == 'opened':
+                                            t_max_2 = t_max_prime
 
-                                if not (t_min_1 <= t_min_2 and t_max_1 <= t_max_2):
+                                # the set of event is no later than the new Z-state and the set of event should not be empty
+                                #
+                                # ..._1 -> state_t,         ..._2 -> z_state
+                                #          root_state                current_state
+                                if not (t_min_1 <= t_min_2 and t_max_1 <= t_max_2):         # t_min_1 > t_min_2 or t_max_1 > t_max_2   ↓
+                                    is_all_time_interval_smaller = False
+                                    break
+                                elif t_min_1 == t_min_2 and t_min_1 == 'opend' and t_min_2 == 'closed':
+                                    is_all_time_interval_smaller = False
+                                    break
+                                elif t_max_1 == t_max_2 and t_max_1 == 'opend' and t_max_2 == 'closed':
                                     is_all_time_interval_smaller = False
                                     break
 
@@ -1120,10 +1496,14 @@ class t_bts():
                 for event_t in policy_state_t_dict.keys():
                     t_list = policy_state_t_dict[event_t]
                     t_max = t_list[0][1]
+                    t_max_attr = t_list[0][3]
                     for t_interval in t_list:
                         t_max_prime = t_interval[1]
+                        t_max_prime_attr = t_interval[3]
                         if t_max_prime > t_max:
                             t_max = t_max_prime                 # find the maximal time in all the time interval from event_t
+                        elif t_max_prime == t_max and t_max_prime_attr == 'closed' and t_max_attr == 'opened':
+                            t_max = t_max_prime
 
                     time_t += t_max
 
@@ -1265,8 +1645,45 @@ class t_bts():
             print("total: " +  str(state_to_remove.__len__()))
 
 
-    def is_interval_disjoint(self, t_min_1, t_max_1, t_min_2, t_max_2):
-        if max(t_min_1, t_min_2) < min(t_max_1, t_max_2):
+    def is_interval_disjoint(self, t_min_1, t_max_1, t_min_2, t_max_2, l_attr_1='closed', r_attr_1='opened', l_attr_2='closed', r_attr_2='opened'):
+        # if max(t_min_1, t_min_2) < min(t_max_1, t_max_2):
+        #     return False
+        # else:
+        #     return True
+        if max(t_min_1, t_min_2) <= min(t_max_1, t_max_2):
+            if r_attr_1 == 'closed' and l_attr_2 == 'closed' and t_max_1 == t_min_2:
+                return True
+            if r_attr_2 == 'closed' and l_attr_1 == 'closed' and t_max_2 == t_min_1:
+                return True
+            #
+            # 若r_attr_1为开, l_attr_2为闭, 则返回False, 这种情况和原来一样
+            #
+            # 若r_attr_1为开, l_attr_2为开, 同样返回True, 这种情况也和原来一样
+            #
+            # 这边是放宽了条件, 针对相等的特殊情况加了两个通过判定
             return False
         else:
             return True
+
+    def merge_right_interval(self, t_max_1, t_max_2, t_max_1_attr, t_max_2_attr):
+        '''
+            |--    |    --  --    |    --  --    |    --|
+                t_min_1 --.... t_min_2 ....-- t_max_1
+        '''
+        t_max_merged = t_max_1
+        t_max_merged_attr = 'opened'
+
+        if t_max_1 > t_max_2:
+            t_max_merged = t_max_1
+            t_max_merged_attr = t_max_1_attr
+        elif t_max_1 < t_max_2:
+            t_max_merged = t_max_2
+            t_max_merged_attr = t_max_2_attr
+        else:
+            # t_max_1 == t_max_2
+            t_max_merged = t_max_1
+            if t_max_1_attr == 'closed' or t_max_2_attr == 'closed':
+                t_max_merged_attr = 'closed'
+            else:
+                t_max_merged_attr = 'opened'
+        return [t_max_merged, t_max_merged_attr]

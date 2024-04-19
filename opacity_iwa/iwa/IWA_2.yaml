@@ -16,15 +16,15 @@ graph:
     '9': {}
 
   edges:
-  - ['8',  '9',  {event: a,  t_min: 1, t_max: 2}]
-  - ['9',  '6',  {event: a,  t_min: 1, t_max: 2}]
-  - ['8',  '6',  {event: a,  t_min: 5, t_max: 7}]
+  - ['8',  '9',  {event: a,  t_min: 1, t_max: 2, l_attr: 'closed', r_attr: 'opened'}]
+  - ['9',  '6',  {event: a,  t_min: 1, t_max: 2, l_attr: 'closed', r_attr: 'opened'}]
+  - ['8',  '6',  {event: a,  t_min: 5, t_max: 7, l_attr: 'closed', r_attr: 'opened'}]
 
-  - ['6',  '2',  {event: uc, t_min: 2, t_max: 4}]
-  - ['2',  '3',  {event: b,  t_min: 1, t_max: 3}]
-  - ['6',  '3',  {event: a,  t_min: 2, t_max: 3}]
-  - ['3',  '6',  {event: o1, t_min: 3, t_max: 5}]
+  - ['6',  '2',  {event: uc, t_min: 2, t_max: 4, l_attr: 'closed', r_attr: 'opened'}]
+  - ['2',  '3',  {event: b,  t_min: 1, t_max: 3, l_attr: 'closed', r_attr: 'opened'}]
+  - ['6',  '3',  {event: a,  t_min: 2, t_max: 3, l_attr: 'closed', r_attr: 'opened'}]
+  - ['3',  '6',  {event: o1, t_min: 3, t_max: 5, l_attr: 'closed', r_attr: 'opened'}]
 
-  - ['2',  '5',  {event: o1, t_min: 4, t_max: 6}]
-  - ['5',  '6',  {event: o3, t_min: 1, t_max: 4}]
-  - ['2',  '6',  {event: o2, t_min: 1, t_max: 8}]
+  - ['2',  '5',  {event: o1, t_min: 4, t_max: 6, l_attr: 'closed', r_attr: 'opened'}]
+  - ['5',  '6',  {event: o3, t_min: 1, t_max: 4, l_attr: 'closed', r_attr: 'opened'}]
+  - ['2',  '6',  {event: o2, t_min: 1, t_max: 8, l_attr: 'closed', r_attr: 'opened'}]
