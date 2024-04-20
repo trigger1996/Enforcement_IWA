@@ -301,6 +301,9 @@ class t_bts():
 
             for state_2_nx in self.t_bts.node:
 
+                if state_2_nx == (('3', '7'), (('b', (4, 10)),)):
+                    debug_var = 17
+
                 # obtaining NX for newly-added Z-states
                 if not (self.state_type(state_2_nx) == 'Z_state' and state_2_nx not in visited):
                     continue
@@ -316,6 +319,9 @@ class t_bts():
                     y_state_t = nx_w_observation[0]
                     policy_t  = nx_w_observation[1]
                     nx_edge_to_add.append((state_2_nx, y_state_t, policy_t))
+
+                    if y_state_t == tuple():
+                        debug_var = 17
 
                 visited.append(state_2_nx)
 
@@ -827,8 +833,6 @@ class t_bts():
                 #
                 # for min max value
                 #
-                event_t_min = -1
-                event_t_max = -1
                 for src_node_nx in min_time_dict[tgt_node_nx][event_t].keys():
                     #
                     t_min_t = min_time_dict[tgt_node_nx][event_t][src_node_nx]
@@ -861,46 +865,49 @@ class t_bts():
                         if src_node_nx == edge_rt[0]:
                             is_reachable = True
 
-                    #
-                    # for reachable states
-                    if is_reachable:
-                        if event_t_min == -1 or t_min_t < event_t_min:
-                            event_t_min = t_min_t
-                        if event_t_max == -1 or t_max_t > event_t_max:
-                            event_t_max = t_max_t
+                        #
+                        # for reachable states
+                        # uncontrollable & observable
+                        if is_reachable:
+                            if event_t in self.event_o and event_t in self.event_uc:
+                                #
+                                # event_t_min = event_t_min + min_time_dict[state_t]  # min_time_dict[edge_start]
+                                # event_t_max = event_t_max + max_time_dict[state_t]  # min_time_dict[edge_start]
+                                event_t_min = t_min_t
+                                event_t_max = t_max_t
 
-                # uncontrollable & observable
-                if event_t in self.event_o and event_t in self.event_uc:
-                    #
-                    # event_t_min = event_t_min + min_time_dict[state_t]  # min_time_dict[edge_start]
-                    # event_t_max = event_t_max + max_time_dict[state_t]  # min_time_dict[edge_start]
-                    event_t_min = event_t_min                               # TODO 先给一个错的数据用来调试
-                    event_t_max = event_t_max
+                                if event_t not in nx_star_un_merged.keys():
+                                    nx_star_un_merged.update({event_t : [(tgt_node_nx, (event_t_min, event_t_max))]})
+                                    #pass
+                                else:
+                                    nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
+                                    #pass
 
-                    if event_t not in nx_star_un_merged.keys():
-                        nx_star_un_merged.update({event_t : [(tgt_node_nx, (event_t_min, event_t_max))]})
-                    else:
-                        nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
-                #
-                # controllable & ovservable
-                elif event_t in self.event_o and event_t in self.event_c and event_t in event_in_policy:
-                    enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
-                    enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
+                            #
+                            # controllable & ovservable
+                            elif event_t in self.event_o and event_t in self.event_c and event_t in event_in_policy:
+                                enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
+                                enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
 
-                    # event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
-                    # event_t_max = event_t_max + max_time_dict[state_t]              # min_time_dict[edge_start]
-                    event_t_min = event_t_min
-                    event_t_max = event_t_max
+                                # event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
+                                # event_t_max = event_t_max + max_time_dict[state_t]              # min_time_dict[edge_start]
+                                event_t_min = t_min_t
+                                event_t_max = t_max_t
 
-                    #
-                    if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
-                        event_t_min = max(event_t_min, enabled_t_min)
-                        event_t_max = min(event_t_max, enabled_t_max)
+                                #
+                                if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
+                                    event_t_min = max(event_t_min, enabled_t_min)
+                                    event_t_max = min(event_t_max, enabled_t_max)
 
-                        if event_t not in nx_star_un_merged.keys():
-                            nx_star_un_merged.update({event_t: [(tgt_node_nx, (event_t_min, event_t_max))]})
-                        else:
-                            nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
+                                    if event_t not in nx_star_un_merged.keys():
+                                        nx_star_un_merged.update({event_t: [(tgt_node_nx, (event_t_min, event_t_max))]})
+                                    else:
+                                        if (tgt_node_nx, (event_t_min, event_t_max)) not in nx_star_un_merged[event_t]:
+                                            nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
+
+
+        if nx_star_un_merged == {'o3': [('7', (3, 5.5)), ('3', (3, 5.5))]}:
+            debug_var = 15
 
         '''
             nx_star: Data structure: 
@@ -912,11 +919,14 @@ class t_bts():
         '''
         nx_star = self.setprate_nx_star(nx_star_un_merged)
 
+        if nx_star == [(('4',), ('o2', (3, 4))), (('4',), ('o2', (4.5, 14))), (('3',), ('o1', (1, 13.25)))]:
+            debug_var = 16
+
         return nx_star
 
     def setprate_nx_star(self, nx_star_un_merged):
 
-        # if a event can be observed through 2 OR MORE EDGES?
+        # if an event can be observed through 2 OR MORE EDGES?
         # then it should be merged / separated
         # e.g.:  [('5', ('o3', 6, 16)), ('6', ('o3', 9, 20))] -->
         #        [('5', ('o3', 6, 9)), (('5', '6'), ('o3', 9, 16)), ('6', ('o3', 9, 20))]
@@ -930,54 +940,169 @@ class t_bts():
         '''
         nx_star = []
 
+        if nx_star_un_merged == {'o3': [('7', (3, 5.5)), ('3', (3, 5.5))]}:
+            debug_var = 18
+
+        # 2024.4.20
+        # Added
+        # Merge first
+        # 数据结构不对, 得倒一下
+        #   可达状态  观测    区间
+        # [ '3' : {o_1 : [(1, 2), (2, 3)]}, {o_1 : [(1, 2), (2, 3)]}, ]
+        interval_list = {}
         for event_t in nx_star_un_merged.keys():
-            if nx_star_un_merged[event_t].__len__() == 1:
-                state_t = nx_star_un_merged[event_t][0][0]
-                t_min   = nx_star_un_merged[event_t][0][1][0]
-                t_max   = nx_star_un_merged[event_t][0][1][1]
+            current_interval_list = nx_star_un_merged[event_t]
+            for observation_t in current_interval_list:
+                reachable_state = observation_t[0]
+                t_min = observation_t[1][0]
+                t_max = observation_t[1][1]
 
-                nx_star.append((tuple(state_t), (event_t, (t_min, t_max))))
-            else:
-                '''
-                    nx_temp: Data structure: 
-                    [ ((state_1, state_2, ...), (event_t_1, t_1, t_2)),
-                      ((state_3, ), (event_t_2, t_3, t_4)), 
-                      ...
-                     ]
-                '''
-                nx_temp = []
-                t_instant = []
+                if reachable_state not in interval_list.keys():
+                    interval_list.update({reachable_state : dict()})
+                #
+                if event_t not in interval_list[reachable_state].keys():
+                    interval_list[reachable_state].update({ event_t: [(t_min, t_max, )]})
+                else:
+                    interval_list[reachable_state][event_t].append((t_min, t_max, ))
 
-                # extract all time instant
-                for nx_w_time_t in nx_star_un_merged[event_t]:
-                    t_instant.append(nx_w_time_t[1][0])          # t_min
-                    t_instant.append(nx_w_time_t[1][1])          # t_max
-                t_instant = list(set(t_instant))
-                t_instant.sort()
+        #
+        # 合并状态
+        for reachable_state in interval_list:
+            for event_t in interval_list[reachable_state].keys():
+                #
+                interval_list_t = interval_list[reachable_state][event_t]
+                interval_list_merged = self.merge_intervals(interval_list_t)            # TODO 正确性
+                #
+                interval_list[reachable_state][event_t] = interval_list_merged
 
-                # check all time instant for all reachable state
-                for i in range(0, t_instant.__len__() - 1):
-                    t_i      = t_instant[i]
-                    t_i_next = t_instant[i + 1]
-                    reachable_state = []
+        #
+        # step 2
+        if interval_list.__len__() == 1:
+            #
+            # 只有一个可达状态, 那么里面肯定都是分好的, 因为能合并的都合并了
+            # 即使有多个可观事件, 那么看到的都是它
+            for reachable_state in interval_list.keys():
+                for event_t in interval_list[reachable_state].keys():
+                    for interval_t in interval_list[reachable_state][event_t]:
+                        t_min = interval_t[0]
+                        t_max = interval_t[1]
 
-                    # merge / separated states within the same policy
-                    for nx_w_time_t in nx_star_un_merged[event_t]:
-                        state_t = nx_w_time_t[0]
-                        t_min   = nx_w_time_t[1][0]
-                        t_max   = nx_w_time_t[1][1]
-                        if t_i >= t_min and t_i < t_max:
-                            reachable_state.append(state_t)
+                        nx_star.append((tuple(reachable_state), (event_t, (t_min, t_max))))
+        else:
+            if nx_star_un_merged == {'o3': [('7', (3, 5.5)), ('3', (3, 5.5))]}:
+                debug_var = 19
 
-                    # sort reachable state
-                    reachable_state = list(set(reachable_state))
-                    reachable_state.sort()
+            #
+            # [
+            #   [state, observation, t_min, t_max]
+            #   ]
+            interval_visited = []                           # 存放计算过的状态
+            for reachable_state in interval_list.keys():
+                for event_t in interval_list[reachable_state].keys():
+                    for interval_t in interval_list[reachable_state][event_t]:
+                        #
+                        t_min = interval_t[0]
+                        t_max = interval_t[1]
+                        #
+                        if [reachable_state, event_t, t_min, t_max] in interval_visited:
+                            continue
+                        interval_visited.append([reachable_state, event_t, t_min, t_max])
 
-                    nx_temp.append((tuple(reachable_state), (event_t, (t_i, t_i_next))))
+                        # 存放所有有交集的状态
+                        # 数据结构
+                        # [
+                        #   [state, t_min, t_max]
+                        #   ]
+                        interval_to_merge = []
+                        interval_to_merge.append([reachable_state, t_min, t_max])
 
-                nx_star = nx_star + nx_temp
+                        # find possible intervals which intersects with the original interval
+                        for reachable_state_prime in interval_list.keys():
+                            if reachable_state == reachable_state_prime:
+                                continue                                                # 目标状态不同
+                            if event_t not in interval_list[reachable_state_prime].keys():
+                                continue                                                # 观测相同
+                            for interval_t_prime in interval_list[reachable_state_prime][event_t]:
+                                t_min_prime = interval_t[0]
+                                t_max_prime = interval_t[1]
+
+                                if not self.is_interval_disjoint(t_min, t_max, t_min_prime, t_max_prime):
+                                    # 如果两个状态有相交
+                                    if [reachable_state_prime, event_t, t_min_prime, t_max_prime] not in interval_visited:
+                                        # 且没有被计算过
+                                        #
+                                        # 加入待计算
+                                        interval_to_merge.append([reachable_state_prime, t_min_prime, t_max_prime])
+                                        #
+                                        # 已阅
+                                        interval_visited.append([reachable_state_prime, event_t, t_min_prime, t_max_prime])
+
+                        # 合并状态
+                        # 这里可以用timeslice的做法
+                        # 根据上方的条件, 只要进来的区间全是相交的
+                        timeslice_nx = []
+                        for event_interval_t in interval_to_merge:
+                            t_min_ts = event_interval_t[1]
+                            t_max_ts = event_interval_t[2]
+                            if t_min_ts not in timeslice_nx:
+                                timeslice_nx.append(t_min_ts)
+                            if t_max_ts not in timeslice_nx:
+                                timeslice_nx.append(t_max_ts)
+                        timeslice_nx = list(set(timeslice_nx))              # 去除多余元素
+                        timeslice_nx.sort()                                 # 排序
+                        # 重组区间
+                        interval_new_nx = []
+                        for i in range(1, timeslice_nx.__len__()):
+                            t_min_ts = event_interval_t[1]
+                            t_max_ts = event_interval_t[2]
+                            interval_new_nx.append((t_min_ts, t_max_ts, ))
+                        #
+                        # 计算可达性
+                        for interval_new_t in interval_new_nx:
+                            t_min_ts = interval_new_t[0]
+                            t_max_ts = interval_new_t[1]
+                            state_list_ts = []
+                            for event_interval_t in interval_to_merge:
+                                state_t   = event_interval_t[0]
+                                t_min_old = event_interval_t[1]
+                                t_max_old = event_interval_t[2]
+
+                                if t_min_ts >= t_min_old and t_max_ts <= t_max_old:
+                                    state_list_ts.append(state_t)
+
+                            state_list_ts = list(set(state_list_ts))    # 去除多余元素
+                            state_list_ts.sort()                        # 排序
+                            nx_star.append((tuple(state_list_ts), (event_t, (t_min_ts, t_max_ts))))
+
+                            if nx_star.__len__() > 1:
+                                debug_var = 21
 
         return nx_star
+
+    def merge_intervals(self, interval_list_in):
+        if interval_list_in.__len__() <= 1:
+            return interval_list_in
+        else:
+            interval_list_merged = []
+            interval_list_in.sort(key=lambda x: x[0])
+
+            for i in interval_list_in:
+                # 把第一个数组元素添加到新的数组种
+                if not interval_list_merged:
+                    interval_list_merged.append(i)
+                    continue
+
+                # 如果有重合 就更新新的数组中的最后一个元素的最大值
+                if interval_list_merged[-1][1] >= i[0]:
+                    t_min = interval_list_merged[-1][0]
+                    t_max_prime = max(interval_list_merged[-1][1], i[1])
+
+                    interval_list_merged[-1] = (t_min, t_max_prime, )
+                else:
+                    # 如果没有重合 就直接添加到新的数组中
+                    interval_list_merged.append(i)
+
+            return interval_list_merged
 
     def is_state_listed(self, z_state, current_state):
         is_state_listed = False
