@@ -306,6 +306,8 @@ class t_bts():
                 # for debugging
                 if '7' in list(state_2_nx[0]):
                     debug_var = 6
+                if state_2_nx == (('3', '5', '7'), (('a', (4, 7)),)):
+                    debug_var = 7
 
                 y_state_nx_star = self.observable_reach_star(state_2_nx, current_state)
                 for nx_w_observation in y_state_nx_star:
@@ -753,10 +755,25 @@ class t_bts():
         if self.state_type(z_state) != 'Z_state' or self.state_type(current_y_state) != 'Y_state':
             raise AssertionError('Must input correct state type')
 
+        # for debugging
+        if z_state == (('3', '5', '7'), (('a', (4, 7)),)):
+            debug_var = 7
+
+        #
+        # 什么时候需要拆分状态?
+        # e.g,
+        #   o_1, [2,3)  --> 2
+        #   o_1, [3,5)  --> 2, 3
+        #   o_1, [5,6)  --> 3
+        # 可以很简单地发现, 状态不同的时候才需要去拆
+        #
+        # 对于Z->Y, 考虑min-max即可, 因为要考虑Z状态中每一个点是否可以到达Y状态
+
         state_ur        = z_state[0]
         policy          = z_state[1]
         event_in_policy = self.get_event_from_policy(policy)
 
+        # Step 1
         # dict for min-max time from current_y_states to nodes in z_state
         '''
         data structure:
@@ -765,44 +782,7 @@ class t_bts():
               ...
              ]
         '''
-        min_time_dict = {}
-        max_time_dict = {}
-
-        # obtain min-max time by DfsTree
-        for current_state in current_y_state:
-
-            min_time_dict.update({current_state : 0})
-            max_time_dict.update({current_state : 0})
-
-            dfs_tree = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_state)
-            if dfs_tree.node.__len__():
-                reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_state))
-
-                # for debugging
-                # 不知道这个放在这里干嘛
-                # [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree(dfs_tree)
-
-                for edge_t in reachable_edge:
-                    edge_end  = edge_t[1]
-                    event_c_t = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['event']
-                    event_t_min = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_min']
-                    event_t_max = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_max']
-
-                    for policy_t in policy:
-                        if event_c_t in self.event_uo and \
-                           ((event_c_t == policy_t[0] and event_t_min >= policy_t[1][0]) or \
-                            (event_c_t in self.event_uc and event_c_t in self.event_uo)):
-                            # min-time
-                            if edge_end not in min_time_dict.keys():
-                                min_time_dict.update({edge_end : event_t_min})
-                            elif min_time_dict[edge_end] > event_t_min:
-                                    min_time_dict.update({edge_end: event_t_min})
-
-                            # max-time
-                            if edge_end not in max_time_dict.keys():
-                                max_time_dict.update({edge_end : event_t_max})
-                            elif max_time_dict[edge_end] < event_t_max:
-                                    max_time_dict.update({edge_end: event_t_max})
+        min_time_dict, max_time_dict = self.find_min_max_time_for_Z_state(z_state, current_y_state)
 
 
         # observable reach with policies
@@ -833,8 +813,8 @@ class t_bts():
                 #   event_t is controllable && event_t is picked in policy && the enabling time must identical to the observation time
                 if event_t in self.event_o and event_t in self.event_uc:
 
-                    event_t_min = event_t_min + min_time_dict[edge_start]
-                    event_t_max = event_t_max + max_time_dict[edge_start]
+                    event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
+                    event_t_max = event_t_max + max_time_dict[state_t]              # max_time_dict[edge_start]
 
                     if event_t not in nx_star_un_merged.keys():
                         nx_star_un_merged.update({event_t : [(edge_end, (event_t_min, event_t_max))]})
@@ -845,11 +825,10 @@ class t_bts():
                     enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
                     enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
 
-                    event_t_min = event_t_min + min_time_dict[edge_start]
-                    event_t_max = event_t_max + max_time_dict[edge_start]
+                    event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
+                    event_t_max = event_t_max + max_time_dict[state_t]              # min_time_dict[edge_start]
 
                     #
-                    # for debugging
                     if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
                         event_t_min = max(event_t_min, enabled_t_min)
                         event_t_max = min(event_t_max, enabled_t_max)
@@ -1021,6 +1000,58 @@ class t_bts():
                             is_identical = True
 
         return is_identical
+
+    def find_min_max_time_for_Z_state(self, z_state, current_y_state):
+
+        policy          = z_state[1]
+        event_in_policy = self.get_event_from_policy(policy)
+
+        min_time_dict = {}
+        max_time_dict = {}
+
+        # for debugging
+        if z_state == (('3', '5', '7'), (('a', (4, 7)),)):
+            debug_var = 9
+
+        # obtain min-max time by DfsTree
+        for current_state in current_y_state:
+
+            if not current_state in min_time_dict.keys():
+                min_time_dict.update({current_state: 0})
+            if not current_state in max_time_dict.keys():
+                max_time_dict.update({current_state: 0})
+
+            dfs_tree = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_state)
+            if dfs_tree.node.__len__():
+                reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_state))
+
+                # for debugging
+                # 不知道这个放在这里干嘛
+                # [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree(dfs_tree)
+
+                for edge_t in reachable_edge:
+                    edge_end = edge_t[1]
+                    event_c_t = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['event']
+                    event_t_min = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_min']
+                    event_t_max = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_max']
+
+                    for policy_t in policy:
+                        if event_c_t in self.event_uo and \
+                                ((event_c_t == policy_t[0] and event_t_min >= policy_t[1][0]) or \
+                                 (event_c_t in self.event_uc and event_c_t in self.event_uo)):
+                            # min-time
+                            if edge_end not in min_time_dict.keys():
+                                min_time_dict.update({edge_end: event_t_min})
+                            elif min_time_dict[edge_end] > event_t_min:
+                                min_time_dict.update({edge_end: event_t_min})
+
+                            # max-time
+                            if edge_end not in max_time_dict.keys():
+                                max_time_dict.update({edge_end: event_t_max})
+                            elif max_time_dict[edge_end] < event_t_max:
+                                max_time_dict.update({edge_end: event_t_max})
+
+        return min_time_dict, max_time_dict
 
     def replace_node_in_bts(self, node, node_prime):
 
