@@ -1563,15 +1563,14 @@ class t_bts():
                     if self.state_type(node_t) == 'Y_state':
                         if self.t_bts.edge[node_t].__len__() <= 1:
                             q_rev_list.append(node_t)
-                        else:
-                            remaining_post_states_to_remove = 0
-                            for post_t in self.t_bts.edge[node_t]:        # if the states in pre_post are ALL going to remove
-                                if post_t == q_rev or post_t in q_rev_list:
-                                    remaining_post_states_to_remove += 1
-                            if self.t_bts.edge[node_t].__len__() <= remaining_post_states_to_remove:
-                                q_rev_list.append(node_t)
                     else:
-                        pass
+                        remaining_post_states_to_remove = 0
+                        for post_t in self.t_bts.edge[node_t]:        # if the states in pre_post are ALL going to remove
+                            if post_t == q_rev or post_t in q_rev_list:
+                                remaining_post_states_to_remove += 1
+                        if self.t_bts.edge[node_t].__len__() <= remaining_post_states_to_remove:
+                            q_rev_list.append(node_t)
+
             else:
                 pred_list = self.get_predecessor(self.t_bts, q_rev)
                 for node_t in pred_list:
