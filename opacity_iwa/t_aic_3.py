@@ -240,11 +240,11 @@ class t_bts():
                 z_state_t = self.unobservable_reach(current_state, policy_t)
 
                 # for debugging
-                if z_state_t == (('3', '5', '7'), (('a', (4, 7)),)):
+                if z_state_t == (('3', '5', '7'), (('a', (4, 7)),)) or z_state_t == (('3', '5', '7'), (('a', (2.5, 4)),)):
                     debug_var = 3
 
                 if ('3', '5', '7') in z_state_t:
-                    self.unobservable_reach(current_state, policy_t)
+                    # self.unobservable_reach(current_state, policy_t)
                     debug_var = 4                                                                                    # # 20230606 Added, for debugging
 
 
@@ -257,8 +257,8 @@ class t_bts():
                 #   5 20230606: for successive states, the ending time of control policy must not be larger
                 [is_z_state_listed, z_state_prime] = self.is_state_listed(z_state_t, current_state)                 # [is_listed, original_state_in_t_bts]
 
-                #if z_state_t not in visited:                                                                       # 20230606 Added
-                if True:
+                if z_state_t not in visited:                                                                       # 20230606 Added
+                # if True:                                                                                           # can be enabled for debugging
                     if is_z_state_listed:
 
                         policy_extended = self.conjunction_of_policies(z_state_t[1], z_state_prime[1])
