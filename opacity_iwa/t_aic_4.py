@@ -176,17 +176,11 @@ class t_bts():
 
                 for sc in events_2c:
 
-                    B = self.dfstree(self.iwa, sc, event_uc=self.event_uc, event_uo=self.event_uo, source=current_node)
+                    B = self.dfstree2(self.iwa, sc, event_uc=self.event_uc, event_uo=self.event_uo, source=current_node)
 
                     # get all time intervals from DfsTree
                     #t_interval = list(set(t_interval) | set(self.timeslice(B)))
-                    t_interval = self.timeslice(B, source=current_node)
-
-                    # 2024.5.14
-                    # for debugging
-                    B_prime = self.dfs_edges2(self.iwa, sc, event_uc=self.event_uc, event_uo=self.event_uo, source=current_node)
-                    t_interval2 = self.timeslice2(B, source=current_node)
-
+                    t_interval = self.timeslice2(B, source=current_node)
                     t_interval.sort(key=sort_timeslice)
 
                     # get all combinations of events, e.g. ('a', 'b') -> ('a',), ('b',), ('a', 'b')
@@ -449,6 +443,9 @@ class t_bts():
         G0 = nx.MultiDiGraph()
         G0.add_node(source)
 
+        if source == '3':
+            debug_var = 27
+
         for edge_t in edges:
             start = list(edge_t)[0]
             end   = list(edge_t)[1]
@@ -528,59 +525,6 @@ class t_bts():
 
                 except StopIteration:
                     stack.pop()
-
-    def dfstree(self, iwa, event_list, event_uc, event_uo, source, is_accumulate_cost=True):
-        edges = list(self.dfs_edges(iwa, event_list, event_uc, event_uo, source))
-
-        G0 = nx.MultiDiGraph()
-        G0.add_node(source)
-
-        for edge_t in edges:
-            start = list(edge_t)[0]
-            end   = list(edge_t)[1]
-            try:
-                event = iwa.edge[start][end][0]['event']
-                #if event in event_list or (event in event_uo and event in event_uc):                                 # 计算路径长的时候不能过可观事件
-                #
-                # for debugging
-                if (event in event_list and event in event_uo) or (event in event_uo and event in event_uc):
-                    t_min =  iwa.edge[start][end][0]['t_min']
-                    t_max = -iwa.edge[start][end][0]['t_max']          # 用负值，得到的最短距离就是最长距离
-                    G0.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
-            except:
-                pass
-
-        # 这里用了个笨办法
-        # 因为真正得到的dfs_tree的t_min和t_max要是累计值，而且累计值必须从取出的edge里面出
-        # 所以这里先用取出的edge建了个图，然后在这个图里面做最短/最长路径
-        dfs_tree = nx.MultiDiGraph()
-        for edge_t in edges:
-            start = list(edge_t)[0]
-            end   = list(edge_t)[1]
-
-            if is_accumulate_cost == True:
-                try:
-                    event = iwa.edge[start][end][0]['event']
-                    t_min  = nx.shortest_path_length(G0, source, start, weight='t_min') + iwa.edge[start][end][0]['t_min']
-                    t_max = -nx.shortest_path_length(G0, source, start, weight='t_max') + iwa.edge[start][end][0]['t_max']
-                except:
-                    pass
-            else:
-                #
-                # 2024.4.20, Added
-                # 这个主要是后面算NX的时候用, 不计算累计误差
-                t_min =  iwa.edge[start][end][0]['t_min']
-                t_max = -iwa.edge[start][end][0]['t_max']
-
-            dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
-
-        # 到这里计算到的都是通过uo到达的最短路径
-        # 那些可经由可达时间到达的点还没有做出来
-        for edge_t in edges:
-            start = list(edge_t)[0]
-            end   = list(edge_t)[1]
-
-        return dfs_tree
 
     def simple_shortest_longest_path_length(self, G0, source, target):
         path_list = list(nx.all_simple_paths(G0, source, target))
@@ -703,8 +647,8 @@ class t_bts():
                     [min_cost_t, max_cost_t] = self.calulate_loop_cost(G0, loop_t)
 
                     # 加到cutoff
+                    k = 1
                     while True:
-                        k = 1
                         is_stop_accumulation_4_loops = False
                         for i in range(0, loop_t.__len__() - 1):
                             u = loop_t[i]
@@ -983,13 +927,13 @@ class t_bts():
         for current_node in current_state:
             ur_node.append(current_node)
 
-            dfs_tree = self.dfstree(self.iwa, event_t, self.event_uc, self.event_uo, current_node)
+            dfs_tree = self.dfstree2(self.iwa, event_t, self.event_uc, self.event_uo, current_node)
             if dfs_tree.node.__len__():
                 reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_node))
 
                 # for debugging
                 # 不知道这个放在这里干嘛
-                # [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree(dfs_tree)
+                # [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree2(dfs_tree)
 
                 for edge_t in reachable_edge:
                     event_c_t = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['event']
@@ -1135,7 +1079,7 @@ class t_bts():
                     #
                     # case 1
                     # 从URTree判断可达性
-                    dfs_tree = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, src_node_nx)
+                    dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, src_node_nx)
                     if dfs_tree.node.__len__():
                         # if the dfs_tree can be obtained
                         reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=src_node_nx))
@@ -1509,10 +1453,8 @@ class t_bts():
             # if not current_node in max_time_dict.keys():
             #     max_time_dict.update({current_node: 0})
 
-            dfs_tree = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
-            dfs_tree_no_accumulation = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, is_accumulate_cost=False)
-
-            dfs_tree_for_test = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
+            dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
+            dfs_tree_no_accumulation = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, is_accumulate_cost=False)
 
             if dfs_tree.node.__len__():
                 reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_node))
