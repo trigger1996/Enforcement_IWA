@@ -182,6 +182,11 @@ class t_bts():
                     #t_interval = list(set(t_interval) | set(self.timeslice(B)))
                     t_interval = self.timeslice(B, source=current_node)
 
+                    # 2024.5.14
+                    # for debugging
+                    B_prime = self.dfs_edges2(self.iwa, sc, event_uc=self.event_uc, event_uo=self.event_uo, source=current_node)
+                    t_interval2 = self.timeslice2(B, source=current_node)
+
                     t_interval.sort(key=sort_timeslice)
 
                     # get all combinations of events, e.g. ('a', 'b') -> ('a',), ('b',), ('a', 'b')
@@ -478,10 +483,251 @@ class t_bts():
                 #
                 # 2024.4.20, Added
                 # 这个主要是后面算NX的时候用, 不计算累计误差
+                t_min = iwa.edge[start][end][0]['t_min']
+                t_max = iwa.edge[start][end][0]['t_max']
+
+            dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
+
+        # 到这里计算到的都是通过uo到达的最短路径
+        # 那些可经由可达时间到达的点还没有做出来
+        for edge_t in edges:
+            start = list(edge_t)[0]
+            end   = list(edge_t)[1]
+
+        return dfs_tree
+
+    def dfs_edges2(self, G, event_list, event_uc, event_uo, source=None, depth_limit=None):
+        if source is None:
+            # edges for all components
+            nodes = G
+        else:
+            # edges for components with source
+            nodes = [source]
+        visited = set()
+        if depth_limit is None:
+            depth_limit = len(G)
+        for start in nodes:
+            if start in visited:
+                continue
+            visited.add(start)
+            stack = [(start, depth_limit, iter(G[start]))]
+            while stack:
+                parent, depth_now, children = stack[-1]
+                try:
+                    child = next(children)
+
+                    if (G.edge[parent][child][0]['event'] in event_list and G.edge[parent][child][0]['event'] in event_uo) or \
+                        (G.edge[parent][child][0]['event'] in event_uo and G.edge[parent][child][0]['event'] in event_uc):        # 加了这个, 而且加了后面一句, 对于所有uc都是直通的
+                        #if str([parent, child]) not in visited:     # 因为list本身不可哈希，所以用str(list())来代替list
+                        if True:                                     # 2024.5.14
+                            yield parent, child                      # yield parent, child 这个版本的python没法调试yield  https://zhuanlan.zhihu.com/p/268605982
+                            visited.add(str([parent, child]))        # visited.add(child)
+
+                            if depth_now > 1:
+                                stack.append((child, depth_now - 1, iter(G[child])))
+
+                except StopIteration:
+                    stack.pop()
+
+    def dfstree(self, iwa, event_list, event_uc, event_uo, source, is_accumulate_cost=True):
+        edges = list(self.dfs_edges(iwa, event_list, event_uc, event_uo, source))
+
+        G0 = nx.MultiDiGraph()
+        G0.add_node(source)
+
+        for edge_t in edges:
+            start = list(edge_t)[0]
+            end   = list(edge_t)[1]
+            try:
+                event = iwa.edge[start][end][0]['event']
+                #if event in event_list or (event in event_uo and event in event_uc):                                 # 计算路径长的时候不能过可观事件
+                #
+                # for debugging
+                if (event in event_list and event in event_uo) or (event in event_uo and event in event_uc):
+                    t_min =  iwa.edge[start][end][0]['t_min']
+                    t_max = -iwa.edge[start][end][0]['t_max']          # 用负值，得到的最短距离就是最长距离
+                    G0.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
+            except:
+                pass
+
+        # 这里用了个笨办法
+        # 因为真正得到的dfs_tree的t_min和t_max要是累计值，而且累计值必须从取出的edge里面出
+        # 所以这里先用取出的edge建了个图，然后在这个图里面做最短/最长路径
+        dfs_tree = nx.MultiDiGraph()
+        for edge_t in edges:
+            start = list(edge_t)[0]
+            end   = list(edge_t)[1]
+
+            if is_accumulate_cost == True:
+                try:
+                    event = iwa.edge[start][end][0]['event']
+                    t_min  = nx.shortest_path_length(G0, source, start, weight='t_min') + iwa.edge[start][end][0]['t_min']
+                    t_max = -nx.shortest_path_length(G0, source, start, weight='t_max') + iwa.edge[start][end][0]['t_max']
+                except:
+                    pass
+            else:
+                #
+                # 2024.4.20, Added
+                # 这个主要是后面算NX的时候用, 不计算累计误差
                 t_min =  iwa.edge[start][end][0]['t_min']
                 t_max = -iwa.edge[start][end][0]['t_max']
 
             dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
+
+        # 到这里计算到的都是通过uo到达的最短路径
+        # 那些可经由可达时间到达的点还没有做出来
+        for edge_t in edges:
+            start = list(edge_t)[0]
+            end   = list(edge_t)[1]
+
+        return dfs_tree
+
+    def simple_shortest_longest_path_length(self, G0, source, target):
+        path_list = list(nx.all_simple_paths(G0, source, target))
+
+        if target == '7':
+            debug_var = 25
+
+        if path_list.__len__() == 0:
+            return [0, 0]
+
+        min_val = -1
+        max_val = -1
+        for path_t in path_list:
+            min_val_t = 0
+            max_val_t = 0
+            for i in range(0, path_t.__len__() - 1):
+                u = path_t[i]
+                v = path_t[i + 1]
+                min_val_t = min_val_t + G0.edge[u][v][0]['t_min']
+                max_val_t = max_val_t + G0.edge[u][v][0]['t_max']
+            if min_val == -1 or min_val > min_val_t and (u == v and min_val != 0):
+                min_val = min_val_t
+            if max_val == -1 or max_val < max_val_t:
+                max_val = max_val_t
+
+        return min_val, max_val
+
+    def calulate_loop_cost(self, G0, path_t):
+        min_val_t = 0
+        max_val_t = 0
+        for i in range(0, path_t.__len__() - 1):
+            u = path_t[i]
+            v = path_t[i + 1]
+            min_val_t = min_val_t + G0.edge[u][v][0]['t_min']
+            max_val_t = max_val_t + G0.edge[u][v][0]['t_max']
+
+        return min_val_t, max_val_t
+
+
+    def dfstree2(self, iwa, event_list, event_uc, event_uo, source, is_accumulate_cost=True, urloop_cutoff_weight=20):
+        edges = list(self.dfs_edges2(iwa, event_list, event_uc, event_uo, source))
+
+        G0 = nx.MultiDiGraph()
+        G0.add_node(source)
+
+        for edge_t in edges:
+            start = list(edge_t)[0]
+            end   = list(edge_t)[1]
+            try:
+                event = iwa.edge[start][end][0]['event']
+                #if event in event_list or (event in event_uo and event in event_uc):                                 # 计算路径长的时候不能过可观事件
+                #
+                # for debugging
+                if (event in event_list and event in event_uo) or (event in event_uo and event in event_uc):
+                    t_min = iwa.edge[start][end][0]['t_min']
+                    t_max = iwa.edge[start][end][0]['t_max']          # 用负值，得到的最短距离就是最长距离
+                    G0.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
+            except:
+                pass
+
+        if ('3', '4') in edges:
+            debug_var = 24
+
+        # 2024.5.22
+        # step 2 计算最小-最大值
+        # step 3 求解是否存在环
+        min_max_val = dict()
+        loop_list = dict()
+        is_with_loop = False
+        #
+        if edges.__len__():
+            loop_t = list(nx.all_simple_paths(G0, edges[0][0], edges[0][0]))
+            if loop_t.__len__():
+                loop_list[edges[0][0]] = loop_t
+                is_with_loop = True
+        #
+        for edge_t in edges:
+            #
+            u = edge_t[0]
+            v = edge_t[1]
+            [min_cost_prime, max_cost_prime] = self.simple_shortest_longest_path_length(G0, source, u)
+            min_cost_prime = min_cost_prime + G0.edge[u][v][0]['t_min']
+            max_cost_prime = max_cost_prime + G0.edge[u][v][0]['t_max']
+            if str(edge_t) not in min_max_val.keys():
+                min_max_val[str(edge_t)] = [min_cost_prime, max_cost_prime]
+
+            #
+            # 求解dfs_tree下所有回环
+            loop_t = list(nx.all_simple_paths(G0, v, v))
+            if loop_t.__len__():
+                loop_list[v] = loop_t
+                is_with_loop = True
+
+        dfs_tree = nx.MultiDiGraph()
+        for edge_t in edges:
+            start = list(edge_t)[0]
+            end   = list(edge_t)[1]
+
+            try:
+                if is_accumulate_cost == True:
+                        event = iwa.edge[start][end][0]['event']
+                        t_min = min_max_val[str(edge_t)][0]
+                        t_max = min_max_val[str(edge_t)][1]
+                else:
+                    #
+                    # 2024.4.20, Added
+                    # 这个主要是后面算NX的时候用, 不计算累计误差
+                    t_min = iwa.edge[start][end][0]['t_min']
+                    t_max = iwa.edge[start][end][0]['t_max']
+
+                dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
+            except:
+                pass
+
+        # Step 3.2
+        if is_with_loop and not is_accumulate_cost:
+            # 求解
+            for lp_index in loop_list.keys():
+                for loop_t in loop_list[lp_index]:
+                    [min_cost_t, max_cost_t] = self.calulate_loop_cost(G0, loop_t)
+
+                    # 加到cutoff
+                    while True:
+                        k = 1
+                        is_stop_accumulation_4_loops = False
+                        for i in range(0, loop_t.__len__() - 1):
+                            u = loop_t[i]
+                            v = loop_t[i + 1]
+                            t_min_plus_k = G0.edge[u][v][0]['t_min']
+                            t_max_plus_k = G0.edge[u][v][0]['t_max']
+
+                            t_min_plus_k += k * min_cost_t
+                            if t_min_plus_k > urloop_cutoff_weight:
+                                is_stop_accumulation_4_loops = True
+                                break
+                            else:
+                                #
+                                # 这里搞一个细节, 上界由cutoff和t_max联合判断
+                                t_max_plus_k += k * min_cost_t
+                                t_max_plus_k = min(t_max_plus_k, urloop_cutoff_weight)
+
+                                # 注意此时后续TimeSlice计算的时候就不能用single edge了
+                                dfs_tree.add_edge(u, v, event=event, t_min=t_min_plus_k, t_max=t_max_plus_k)
+
+                        k += 1
+                        if is_stop_accumulation_4_loops:
+                            break
 
         # 到这里计算到的都是通过uo到达的最短路径
         # 那些可经由可达时间到达的点还没有做出来
@@ -502,6 +748,52 @@ class t_bts():
             t_max = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][0]['t_max']
             t_step.append(t_min)
             t_step.append(t_max)
+
+            # added, IMPORTANT
+            # assign additional time instant to timeslice from controllable & observable event
+            node_end = list(edge_t)[1]
+            for edge_t_next in self.iwa.out_edges(node_end, data=True):
+                # node_next = edge_t_next[1]
+                event_t_next = edge_t_next[2]['event']
+                t_min_next = edge_t_next[2]['t_min'] + t_min
+                t_max_next = edge_t_next[2]['t_max'] + t_max
+
+                if event_t_next in event_c and event_t_next in event_o:
+                    t_step.append(t_min_next)
+                    t_step.append(t_max_next)
+
+        #
+        # for debugging
+        # DONT FORGET to check the start point for the controllable & observable event
+        for edge_t_next in self.iwa.out_edges(source, data=True):
+            event_t_next = edge_t_next[2]['event']
+            t_min_next = edge_t_next[2]['t_min']
+            t_max_next = edge_t_next[2]['t_max']
+
+            if event_t_next in event_c and event_t_next in event_o:
+                t_step.append(t_min_next)
+                t_step.append(t_max_next)
+
+        t_step = list(set(t_step))      # 排序，去除多余元素
+        t_step.sort()
+        for i in range(0, t_step.__len__() - 1):
+            t_interval.append((t_step[i], t_step[i + 1]))
+        #t_interval.sort(key=sort_timeslice)
+
+        return t_interval
+
+    def timeslice2(self, dfs_tree, source):
+        event_c = self.event_c
+        event_o = self.event_o
+
+        t_step = []
+        t_interval = []
+        for edge_t in dfs_tree.edges():
+            for j in dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]].keys():
+                t_min = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][j]['t_min']
+                t_max = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][j]['t_max']
+                t_step.append(t_min)
+                t_step.append(t_max)
 
             # added, IMPORTANT
             # assign additional time instant to timeslice from controllable & observable event
@@ -1219,6 +1511,9 @@ class t_bts():
 
             dfs_tree = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
             dfs_tree_no_accumulation = self.dfstree(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, is_accumulate_cost=False)
+
+            dfs_tree_for_test = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
+
             if dfs_tree.node.__len__():
                 reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_node))
 
