@@ -312,6 +312,8 @@ class t_bts():
                     debug_var = 6
                 if state_2_nx == (('3', '5', '7'), (('a', (4, 7)),)):
                     debug_var = 7
+                if state_2_nx == (('1', '2'), (('a', (1, 2)), ('o3', (3, 5.5)))):
+                    debug_var = 18
 
                 y_state_nx_star = self.observable_reach_star(state_2_nx, current_state)
                 for nx_w_observation in y_state_nx_star:
