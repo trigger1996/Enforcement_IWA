@@ -376,9 +376,11 @@ class t_bts():
             if event_t not in policy.keys():
                 policy.update({event_t : [[t_1, t_2]]})
             else:
-                t_list = policy[event_t]
-                t_list.append([t_1, t_2])
-                policy.update({event_t, t_list})
+                #t_list = policy[event_t]
+                #t_list.append([t_1, t_2])
+                #policy.update({event_t, t_list})           # 当时为啥这么写真奇怪
+                policy[event_t].append([t_1, t_2])          # 相同功能
+
 
         return policy
 
@@ -495,7 +497,7 @@ class t_bts():
 
         return dfs_tree
 
-    def dfs_edges2(self, G, event_list, event_uc, event_uo, source=None, depth_limit=None):
+    def dfs_edges2(self, G, event_list, event_uc, event_uo, source=None, depth_limit=None, cutoff_weight=20):
         if source is None:
             # edges for all components
             nodes = G
@@ -509,9 +511,9 @@ class t_bts():
             if start in visited:
                 continue
             visited.add(start)
-            stack = [(start, depth_limit, iter(G[start]))]
+            stack = [(start, depth_limit, 0, iter(G[start]))]
             while stack:
-                parent, depth_now, children = stack[-1]
+                parent, depth_now, accumulated_weight, children = stack[-1]
                 try:
                     child = next(children)
 
@@ -522,17 +524,29 @@ class t_bts():
                             yield parent, child                      # yield parent, child 这个版本的python没法调试yield  https://zhuanlan.zhihu.com/p/268605982
                             visited.add(str([parent, child]))        # visited.add(child)
 
-                            if depth_now > 1:
-                                stack.append((child, depth_now - 1, iter(G[child])))
+                            if depth_now > 1 and accumulated_weight <= cutoff_weight:
+                                t_min_t = G.edge[parent][child][0]['t_min']             # t_min若大于cutoff则代表完全不可达
+                                stack.append((child, depth_now - 1, accumulated_weight + t_min_t, iter(G[child])))
 
                 except StopIteration:
                     stack.pop()
 
-    def simple_shortest_longest_path_length(self, G0, source, target):
+    def all_simple_paths2(self, G0, source, target):
         path_list = list(nx.all_simple_paths(G0, source, target))
+        path_list = list(set([tuple(path_list_t) for path_list_t in path_list]))
+
+        return path_list
+
+    def simple_shortest_longest_path_length(self, G0, source, target):
+        path_list = self.all_simple_paths2(G0, source, target)
 
         if target == '7':
             debug_var = 25
+
+        if '7' in G0.edge.keys() and '3' in G0.edge['7'].keys():
+            debug_var = 101
+            if G0.edge['7']['3'].__len__() >= 10:
+                debug_var = 100
 
         if path_list.__len__() == 0:
             return [0, 0]
@@ -567,7 +581,10 @@ class t_bts():
 
 
     def dfstree2(self, iwa, event_list, event_uc, event_uo, source, is_accumulate_cost=True, urloop_cutoff_weight=20):
-        edges = list(self.dfs_edges2(iwa, event_list, event_uc, event_uo, source))
+        edges = list(self.dfs_edges2(iwa, event_list, event_uc, event_uo, source, cutoff_weight=20))
+
+        if edges.__len__() > 25:
+            debug_var = 100
 
         G0 = nx.MultiDiGraph()
         G0.add_node(source)
@@ -598,7 +615,7 @@ class t_bts():
         is_with_loop = False
         #
         if edges.__len__():
-            loop_t = list(nx.all_simple_paths(G0, edges[0][0], edges[0][0]))
+            loop_t = self.all_simple_paths2(G0, edges[0][0], edges[0][0])
             if loop_t.__len__():
                 loop_list[edges[0][0]] = loop_t
                 is_with_loop = True
@@ -615,7 +632,7 @@ class t_bts():
 
             #
             # 求解dfs_tree下所有回环
-            loop_t = list(nx.all_simple_paths(G0, v, v))
+            loop_t = self.all_simple_paths2(G0, v, v)
             if loop_t.__len__():
                 loop_list[v] = loop_t
                 is_with_loop = True
@@ -1013,6 +1030,9 @@ class t_bts():
         if z_state == (('3', '5', '7'), (('a', (4, 7)),)):
             debug_var = 7
 
+        if z_state == (('1', '2'), (('a', (1, 2)), ('o3', (3, 5.5)))):
+            debug_var = 8
+
         #
         # 什么时候需要拆分状态?
         # e.g,
@@ -1103,45 +1123,45 @@ class t_bts():
                         if src_node_nx == edge_rt[0]:
                             is_reachable = True
 
-                        #
-                        # for reachable states
-                        # uncontrollable & observable
-                        if is_reachable:
-                            if event_t in self.event_o and event_t in self.event_uc:
-                                #
-                                # event_t_min = event_t_min + min_time_dict[state_t]  # min_time_dict[edge_start]
-                                # event_t_max = event_t_max + max_time_dict[state_t]  # min_time_dict[edge_start]
-                                event_t_min = t_min_t
-                                event_t_max = t_max_t
+                    #
+                    # for reachable states
+                    # uncontrollable & observable
+                    if is_reachable:
+                        if event_t in self.event_o and event_t in self.event_uc:
+                            #
+                            # event_t_min = event_t_min + min_time_dict[state_t]  # min_time_dict[edge_start]
+                            # event_t_max = event_t_max + max_time_dict[state_t]  # min_time_dict[edge_start]
+                            event_t_min = t_min_t
+                            event_t_max = t_max_t
 
-                                if event_t not in nx_star_un_merged.keys():
-                                    nx_star_un_merged.update({event_t : [(tgt_node_nx, (event_t_min, event_t_max))]})
-                                    #pass
-                                else:
-                                    nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
-                                    #pass
+                            if event_t not in nx_star_un_merged.keys():
+                                nx_star_un_merged.update({event_t : [(tgt_node_nx, (event_t_min, event_t_max))]})
+                                #pass
+                            else:
+                                nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
+                                #pass
+
+                        #
+                        # controllable & ovservable
+                        elif event_t in self.event_o and event_t in self.event_c and event_t in event_in_policy:
+                            enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
+                            enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
+
+                            # event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
+                            # event_t_max = event_t_max + max_time_dict[state_t]              # min_time_dict[edge_start]
+                            event_t_min = t_min_t
+                            event_t_max = t_max_t
 
                             #
-                            # controllable & ovservable
-                            elif event_t in self.event_o and event_t in self.event_c and event_t in event_in_policy:
-                                enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
-                                enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
+                            if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
+                                event_t_min = max(event_t_min, enabled_t_min)
+                                event_t_max = min(event_t_max, enabled_t_max)
 
-                                # event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
-                                # event_t_max = event_t_max + max_time_dict[state_t]              # min_time_dict[edge_start]
-                                event_t_min = t_min_t
-                                event_t_max = t_max_t
-
-                                #
-                                if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
-                                    event_t_min = max(event_t_min, enabled_t_min)
-                                    event_t_max = min(event_t_max, enabled_t_max)
-
-                                    if event_t not in nx_star_un_merged.keys():
-                                        nx_star_un_merged.update({event_t: [(tgt_node_nx, (event_t_min, event_t_max))]})
-                                    else:
-                                        if (tgt_node_nx, (event_t_min, event_t_max)) not in nx_star_un_merged[event_t]:
-                                            nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
+                                if event_t not in nx_star_un_merged.keys():
+                                    nx_star_un_merged.update({event_t: [(tgt_node_nx, (event_t_min, event_t_max))]})
+                                else:
+                                    if (tgt_node_nx, (event_t_min, event_t_max)) not in nx_star_un_merged[event_t]:
+                                        nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
 
 
         if nx_star_un_merged == {'o3': [('7', (3, 5.5)), ('3', (3, 5.5))]}:
@@ -1447,6 +1467,9 @@ class t_bts():
         if z_state == (('3', '5', '6', '7'), (('a', (2.5, 7)), ('b', (4, 7)))):
             debug_var = 9
 
+        if z_state == (('1', '2'), (('a', (1, 2)), ('o3', (3, 5.5)))):
+            debug_var = 8
+
         # obtain min-max time by DfsTree
         for current_node in current_y_state:
 
@@ -1457,6 +1480,12 @@ class t_bts():
 
             dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
             dfs_tree_no_accumulation = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, is_accumulate_cost=False)
+
+            if '7' in dfs_tree.edge.keys() and '3' in dfs_tree.edge['7'].keys():
+                if dfs_tree.edge['7']['3'].__len__() >= 4:
+                    debug_var = 100
+
+                    dfs_tree_for_debugging = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
 
             if dfs_tree.node.__len__():
                 reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_node))
@@ -1535,11 +1564,13 @@ class t_bts():
                     # 其实这边用dfs_tree的值来算累计误差其实是不科学的
                     # 这边干脆直接算完, 在NX_star里就不用再计算了
                     try:
-                        t_min_t =  nx.shortest_path_length(dfs_tree, current_state, state_to_calculate, weight='t_min')  # 注意这里的dfs_tree的cost是没有累加的, 所以最短路算出来的值是可以直接用的
+                        # t_min_t =  nx.shortest_path_length(dfs_tree, current_state, state_to_calculate, weight='t_min')  # 注意这里的dfs_tree的cost是没有累加的, 所以最短路算出来的值是可以直接用的
+                        # t_min_t = t_min_t + edge_st[2]['t_min']
+                        # t_max_t = -nx.shortest_path_length(dfs_tree, current_state, state_to_calculate, weight='t_max')  # 同时为了方便计算, 这里的t_max取了负值
+                        # t_max_t = t_max_t + edge_st[2]['t_max']                                                          # 其实是可以不用这么做的, 用原版的dfs_tree也能算, 但是这样好理解一些
+                        [t_min_t, t_max_t] = self.simple_shortest_longest_path_length(dfs_tree, current_state, state_to_calculate)
                         t_min_t = t_min_t + edge_st[2]['t_min']
-                        t_max_t = -nx.shortest_path_length(dfs_tree, current_state, state_to_calculate, weight='t_max')  # 同时为了方便计算, 这里的t_max取了负值
-                        t_max_t = t_max_t + edge_st[2]['t_max']                                                          # 其实是可以不用这么做的, 用原版的dfs_tree也能算, 但是这样好理解一些
-
+                        t_max_t = t_max_t + edge_st[2]['t_max']
                     except:
                         print("[Nx Star], no current state in edge")
                         print(dfs_tree.node)
@@ -1742,7 +1773,7 @@ class t_bts():
             target.append(node_t)
 
         for target_t in target:
-            supervisor_t = list(nx.all_simple_paths(self.t_bts, tuple(self.init_state), target_t))
+            supervisor_t = self.all_simple_paths2(self.t_bts, tuple(self.init_state), target_t)
             for supervisor_t_t in supervisor_t:
                 supervisor_list.append(supervisor_t_t)
 
