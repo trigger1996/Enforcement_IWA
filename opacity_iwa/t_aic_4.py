@@ -398,9 +398,10 @@ class t_bts():
             if event_t not in policy_dict.keys():
                 policy_dict.update({event_t : [[t_1, t_2]]})
             else:
-                t_list = policy_dict[event_t]
-                t_list.append([t_1, t_2])
-                policy_dict.update({event_t, t_list})
+                # t_list = policy[event_t]
+                # t_list.append([t_1, t_2])
+                # policy.update({event_t, t_list})          # unhashable type: 'list', 不知道之前为啥这么写
+                policy_dict[event_t].append([t_1, t_2])     # 2024.5.15
 
         return policy_dict
 
@@ -745,7 +746,7 @@ class t_bts():
 
         return t_interval
 
-    def timeslice2(self, dfs_tree, source):
+    def timeslice2(self, dfs_tree, source, urloop_cutoff_weight=20):
         event_c = self.event_c
         event_o = self.event_o
 
@@ -782,6 +783,18 @@ class t_bts():
             if event_t_next in event_c and event_t_next in event_o:
                 t_step.append(t_min_next)
                 t_step.append(t_max_next)
+
+        # added
+        # pop all cost larger than cutoff
+        t_larger_than_cutoff = []
+        for t in t_step:
+            if t > urloop_cutoff_weight:
+                t_larger_than_cutoff.append(t)
+        for t in t_larger_than_cutoff:
+            t_step.pop(t_step.index(t))
+        # don't remember to add cutoff
+        if t_larger_than_cutoff.__len__():
+            t_step.append(urloop_cutoff_weight)
 
         t_step = list(set(t_step))      # 排序，去除多余元素
         t_step.sort()

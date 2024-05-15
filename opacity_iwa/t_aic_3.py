@@ -380,9 +380,10 @@ class t_bts():
             if event_t not in policy.keys():
                 policy.update({event_t : [[t_1, t_2]]})
             else:
-                t_list = policy[event_t]
-                t_list.append([t_1, t_2])
-                policy.update({event_t, t_list})
+                # t_list = policy[event_t]
+                # t_list.append([t_1, t_2])
+                # policy.update({event_t, t_list})          # unhashable type: 'list', 不知道之前为啥这么写
+                policy[event_t].append([t_1, t_2])          # 2024.5.15
 
         return policy
 
@@ -400,9 +401,10 @@ class t_bts():
             if event_t not in policy_dict.keys():
                 policy_dict.update({event_t : [[t_1, t_2]]})
             else:
-                t_list = policy_dict[event_t]
-                t_list.append([t_1, t_2])
-                policy_dict.update({event_t, t_list})
+                #t_list = policy_dict[event_t]
+                #t_list.append([t_1, t_2])
+                #policy_dict.update({event_t, t_list})
+                policy_dict[event_t].append([t_1, t_2])     # 2024.5.15
 
         return policy_dict
 
