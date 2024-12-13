@@ -1,10 +1,14 @@
 # -*- coding:utf-8 -*-
 import networkx as nx
+import io
 import yaml
+import copy
 from itertools import combinations, product
+from heapq import heappush, heappop
+from itertools import count
+from collections import Counter
 from utils import print_c
 import functools
-import basic.intervals as intervals
 
 import matplotlib.pyplot as plt
 
@@ -22,12 +26,7 @@ def sort_root_state(x, y):
         elif x[2] < y[2]:
             return -1
         else:
-            if x[3] == 'closed' and y[3] == 'open':
-                return 1
-            elif x[3] == 'open' and y[3] == 'closed':
-                return -1
-            else:
-                return 0
+            return 0
 
 def sort_policies(t1, t2):
     # 比较长度
@@ -50,7 +49,7 @@ def sort_policies(t1, t2):
 
     return 0
 
-class w_aic():
+class t_bts():
     def __init__(self, fin=None, source=None, event_c=None, event_o=None, event_uc=None, event_uo=None):
         self.event_uo = []
         self.event_o = []
@@ -60,7 +59,7 @@ class w_aic():
         self.iwa = nx.MultiDiGraph()
         self.init_state = []
 
-        self.w_aic = nx.MultiDiGraph()
+        self.t_bts = nx.MultiDiGraph()
 
         if event_c != None and event_o != None and event_uc != None and event_uo != None:
             self.set_events(event_c, event_o, event_uc, event_uo)
@@ -78,12 +77,10 @@ class w_aic():
             else:
                 self.iwa.add_node(node_t)
         for edge_t in data['graph']['edges']:
-            event  = edge_t[2]['event']
-            t_min  = edge_t[2]['t_min']
-            t_max  = edge_t[2]['t_max']
-            l_attr = edge_t[2]['l_attr']                        # 'closed' or 'open'
-            r_attr = edge_t[2]['r_attr']                        # REMEMBER, 'open' not 'opened'
-            self.iwa.add_edge(edge_t[0], edge_t[1], event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
+            event = edge_t[2]['event']
+            t_min = edge_t[2]['t_min']
+            t_max = edge_t[2]['t_max']
+            self.iwa.add_edge(edge_t[0], edge_t[1], event=event, t_min=t_min, t_max=t_max)
 
         for _iter in source:
             self.init_state.append(_iter)
@@ -95,7 +92,7 @@ class w_aic():
         self.event_uo = event_uo
 
     # main function
-    def construct_W_AIC(self, source=None, event_uo=None, event_o=None, event_c=None, event_uc=None, t_cutoff=15):
+    def construct_T_BTS(self, source=None, event_uo=None, event_o=None, event_c=None, event_uc=None, t_cutoff=20):
 
         '''
 
@@ -177,12 +174,11 @@ class w_aic():
 
         y_stack = []
         visited = []
-        ur_list = {}                        # for recording all z state that originates from y state, including those replaced
 
         y_stack.append(tuple(self.init_state))
         visited.append(tuple(self.init_state))
 
-        self.w_aic.add_node(tuple(self.init_state))
+        self.t_bts.add_node(tuple(self.init_state))
 
         while y_stack:
             current_state = y_stack.pop()
@@ -201,16 +197,17 @@ class w_aic():
 
                 for sc in events_2c:
 
-                    B = self.dfstree2(self.iwa, sc, event_uc=self.event_uc, event_uo=self.event_uo, source=current_node, t_cutoff=t_cutoff)
+                    B = self.dfstree2(self.iwa, sc, event_uc=self.event_uc, event_uo=self.event_uo, source=current_node, urloop_cutoff_weight=t_cutoff)
+
+                    if current_state ==  ('3', '7'):
+                        # for debugging
+                        print_c("\\Sigma_c: %s, dfstree: %d / states: %s" % (str(sc) ,B.node.__len__(), str(B.node),), color='cyan', style='italic')
+
 
                     # get all time intervals from DfsTree
                     #t_interval = list(set(t_interval) | set(self.timeslice(B)))
                     t_interval = self.timeslice2(B, source=current_node)
                     t_interval.sort(key=sort_timeslice)
-
-                    # for debugging
-                    # if current_state == ('3', '7'):
-                    #     print_c("current_state %s / %s | edgeNum_URTree: %d | intervalNum_TS: %d" % (str(current_node), str(current_state), B.number_of_edges(), t_interval.__len__(), ), color='bright_cyan', style='bold')
 
                     # get all combinations of events, e.g. ('a', 'b') -> ('a',), ('b',), ('a', 'b')
                     _2_sc = []
@@ -221,56 +218,50 @@ class w_aic():
                     # policies = events + time intervals
                     # gain policies: e.g. (('a', (5, 7)), ('b', (1, 2)), ('o3', (2, 4)))
                     sc_t_current = []
+                    policy_removed = []               # for debugging
+                    [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree(B, source=current_node)
                     for _2_sc_t in _2_sc:
                         sc_temp = self.assign_intervals_to_policies(_2_sc_t, t_interval)
                         for policy_t in sc_temp:
+
                             if type(policy_t[0]) == str:
-                                sc_t_current.append((policy_t, ))         # put singular policy to a list such that it can be treated like policy: (('a', (1, 2)), ('b', (7, 11)))
-                            else:
-                                sc_t_current.append(policy_t)
+                                policy_t = (policy_t, )
 
+                            is_policy_inproper = False
+                            for policy_index in list(policy_t):
+                                event_t = policy_index[0]
+                                t_i = policy_index[1][0]
+                                t_j = policy_index[1][1]
+                                if event_t not in sc_t_max.keys() or t_i < sc_t_min[event_t] or t_j > sc_t_max[event_t]:
+                                    is_policy_inproper = True
+                                    break
 
-                    # additional
-                    # get all minimal-maximal time for the events in a DfsTree
-                    [sc_t_min, sc_t_max] = self.get_min_max_time_from_dfstree(B, source=current_node)
+                            if is_policy_inproper:
+                                if policy_t not in policy_removed:
+                                    policy_removed.append(policy_t)
+                                continue
 
-                    # remove all improper timing policies
-                    policy_to_remove = []
-                    for policy_t in sc_t_current:
-                           for policy_index in list(policy_t):
-                               event_t = policy_index[0]
-                               t_i = policy_index[1][0]
-                               t_j = policy_index[1][1]
-                               if event_t not in sc_t_max.keys() or \
-                                  t_i < sc_t_min[event_t] or t_j > sc_t_max[event_t]:       # event_t not in sc_t_max.keys() -> our picked policy may be inaccessible in dfstree B
-                                   policy_to_remove.append(policy_t)
-
-                    for policy_t in policy_to_remove:
-                        try:
-                            sc_t_current.remove(policy_t)
-                        except:
-                            pass
+                            sc_t_current.append(policy_t)
 
                     # obtain policies from different nodes in Y
                     sc_timed.append(tuple())                            # added an empty tuple
                     sc_timed = list(set(sc_timed + sc_t_current))
 
-            # for debugging
-            for policy_d in sc_timed:
-                for policy_d_i in policy_d:
-                    if policy_d_i[1][1] > t_cutoff:
-                        print_c("invalid policy ... %s, t > cutoff: %d" % (str(policy_d), t_cutoff,), color='bright_magenta', style='italic')
-
-            print_c("current_state %s / sc_timed number: %d" % (str(current_state), sc_timed.__len__(),), color='cyan', style='bold')
+            print_c("current_state %s / sc_timed number: %d" % (str(current_state), sc_timed.__len__(),), color='green', style='bold')
             print_c("sc_timed: %s" % (str(sc_timed),), color='yellow')
             sc_timed.sort(key=functools.cmp_to_key(sort_policies))
 
-            # for debugging
-            if current_state == ('3', '7'):
-                debug_var = 1
+
 
             # obtain Unobservable reaches
+            ur_list_current = []
             for policy_t in sc_timed:
+
+                if current_state == tuple('3'):
+                    debug_var = 1                                                                                    # 20230606 Added, for debugging
+                    if policy_t == (('a', (2, 4)), ):
+                        debug_var = 2
+
                 z_state_t = self.unobservable_reach(current_state, policy_t)
 
                 # for debugging
@@ -289,10 +280,10 @@ class w_aic():
                 #   3 the policies of controllable & observable events are identical (time must be identical)
                 #   4 is originated from the same Y-state
                 #   5 20230606: for successive states, the ending time of control policy must not be larger
-                [is_z_state_listed, z_state_prime] = self.is_state_listed(z_state_t, current_state, ur_list)                         # [is_listed, original_state_in_t_bts]
+                [is_z_state_listed, z_state_prime] = self.is_state_listed(z_state_t, current_state)                 # [is_listed, original_state_in_t_bts]
 
-                if z_state_t not in visited:                                                                                         # 20230606 Added
-                # if True:                                                                                                           # can be enabled for debugging
+                if z_state_t not in visited:                                                                       # 20230606 Added
+                # if True:                                                                                           # can be enabled for debugging
                     if is_z_state_listed:
 
                         policy_extended = self.conjunction_of_policies(z_state_t[1], z_state_prime[1])
@@ -300,10 +291,8 @@ class w_aic():
 
                         self.replace_node_in_bts(z_state_prime, z_state_extended)
 
-                        if current_state not in ur_list.keys():
-                            ur_list[current_state] = [ z_state_extended ]
-                        else:
-                            ur_list[current_state].append(z_state_extended)
+                        ur_list_current.append(z_state_extended)
+
                     else:
                         # find a root node, and then add the new Z-state to T-BTS
                         # the root node must satisfy
@@ -311,18 +300,10 @@ class w_aic():
                         # 2 the set of event is no more than the new Z-state
                         # 3 the time of shared state must be smaller than the new Z-state
                         # 4 find all states satisfying 1 -- 3, and the first the number of event then the overall time should be maximized
-                        if current_state not in ur_list.keys():
-                            ur_list_current = []
-                        else:
-                            ur_list_current = ur_list[current_state]
-
                         root_state = self.find_root_state_for_z_states(current_state, z_state_t, ur_list_current)
-                        self.w_aic.add_edge(root_state, z_state_t, control=z_state_t[1])
+                        self.t_bts.add_edge(root_state, z_state_t, control=z_state_t[1])
 
-                        if current_state not in ur_list.keys():
-                            ur_list[current_state] = [ z_state_t ]
-                        else:
-                            ur_list[current_state].append(z_state_t)
+                        ur_list_current.append(z_state_t)
 
                     # for debugging
                     debug_state_t = (('3', '5', '7'), (('a', (2.5, 7)), ('b', (7, 10))))
@@ -343,7 +324,7 @@ class w_aic():
             '''
             nx_edge_to_add = []
 
-            for state_2_nx in self.w_aic.node:
+            for state_2_nx in self.t_bts.node:
 
                 if state_2_nx == (('3', '7'), (('b', (4, 10)),)):
                     debug_var = 17
@@ -360,7 +341,7 @@ class w_aic():
                 if state_2_nx == (('1', '2'), (('a', (1, 2)), ('o3', (3, 5.5)))):
                     debug_var = 18
 
-                y_state_nx_star = self.observable_reach_star(state_2_nx, current_state, t_cutoff=t_cutoff)
+                y_state_nx_star = self.observable_reach_star(state_2_nx, current_state)
                 for nx_w_observation in y_state_nx_star:
                     y_state_t = nx_w_observation[0]
                     policy_t  = nx_w_observation[1]
@@ -377,16 +358,15 @@ class w_aic():
                 event_t   = nx_w_observation[2][0]
                 t_min     = nx_w_observation[2][1][0]
                 t_max     = nx_w_observation[2][1][1]
-                l_attr    = nx_w_observation[2][1][2]
-                r_attr    = nx_w_observation[2][1][3]
 
-                self.w_aic.add_edge(z_state_t, y_state_t, observation=(event_t, t_min, t_max, l_attr, r_attr))
+                self.t_bts.add_edge(z_state_t, y_state_t, observation=(event_t, t_min, t_max))
 
                 if y_state_t not in y_stack:
                     y_stack.append(y_state_t)
 
-            print('iter completed once!')
-            print_c("[TAC2024.R2] number of states W_AIC %d" % (self.w_aic.node.__len__(),), color="green", style="bold")
+            print_c('iter completed once!, state number: %d' % (self.t_bts.node.__len__(),), color='blue')
+            # print_c('%s' % (str(y_stack)), color='yellow')
+            # print_c('%s' % (str(list(self.t_bts.node)), ), color='green')
 
         print('T-BTS constructed!')
 
@@ -421,21 +401,13 @@ class w_aic():
             event_t = policy_t[0]
             t_1 = policy_t[1][0]
             t_2 = policy_t[1][1]
-            #
-            # 20241210 added
-            if policy_t[1].__len__() > 2:
-                l_attr = policy_t[1][2]
-                r_attr = policy_t[1][3]
-            else:
-                l_attr = 'closed'
-                r_attr = 'open'             # left-closed and right-open by default
             if event_t not in policy.keys():
-                policy.update({event_t : [[t_1, t_2, l_attr, r_attr]]})
+                policy.update({event_t : [[t_1, t_2]]})
             else:
                 #t_list = policy[event_t]
                 #t_list.append([t_1, t_2])
-                #policy.update({event_t, t_list})                           # 当时为啥这么写真奇怪
-                policy[event_t].append([t_1, t_2, l_attr, r_attr])          # 相同功能
+                #policy.update({event_t, t_list})           # 当时为啥这么写真奇怪
+                policy[event_t].append([t_1, t_2])          # 相同功能
 
 
         return policy
@@ -451,20 +423,13 @@ class w_aic():
             event_t = policy_t[0]
             t_1 = policy_t[1][0]
             t_2 = policy_t[1][1]
-            #
-            # 20241210 added
-            if policy_t[1].__len__() > 2:
-                l_attr = policy_t[1][2]
-                r_attr = policy_t[1][3]
-            else:
-                l_attr = 'closed'
-                r_attr = 'open'             # left-closed and right-open by default
             if event_t not in policy_dict.keys():
-                policy_dict.update({event_t : [[t_1, t_2, l_attr, r_attr]]})
+                policy_dict.update({event_t : [[t_1, t_2]]})
             else:
-                t_list = policy_dict[event_t]
-                t_list.append([t_1, t_2, l_attr, r_attr])
-                policy_dict.update({event_t : t_list})
+                # t_list = policy[event_t]
+                # t_list.append([t_1, t_2])
+                # policy.update({event_t, t_list})          # unhashable type: 'list', 不知道之前为啥这么写
+                policy_dict[event_t].append([t_1, t_2])     # 2024.5.15
 
         return policy_dict
 
@@ -575,7 +540,7 @@ class w_aic():
             visited.add(start)
             stack = [(start, 0, 0, iter(G[start]))]
             while stack:
-                parent, t_acc_min, t_acc_max, children = stack[-1]
+                parent, acc_weight_min, acc_weight_max, children = stack[-1]
                 try:
                     child = next(children)
 
@@ -583,26 +548,26 @@ class w_aic():
                         (G.edge[parent][child][0]['event'] in event_uo and G.edge[parent][child][0]['event'] in event_uc):        # 加了这个, 而且加了后面一句, 对于所有uc都是直通的
                         #if str([parent, child]) not in visited:     # 因为list本身不可哈希，所以用str(list())来代替list
                         if True:                                     # 2024.5.14
-                            t_min_t = G.edge[parent][child][0]['t_min']  # t_min若大于cutoff则代表完全不可达
-                            t_max_t = G.edge[parent][child][0]['t_max']
-                            t_acc_min += t_min_t
-                            t_acc_max += t_max_t
-                            #
-                            # 2024.12.10 Added
-                            l_attr = G.edge[parent][child][0]['l_attr']                     # 这个东西本身和iwa的边是一致的, 因此不需要递归
-                            r_attr = G.edge[parent][child][0]['r_attr']
+                            yield parent, child, acc_weight_min, acc_weight_max  # yield parent, child 这个版本的python没法调试yield  https://zhuanlan.zhihu.com/p/268605982
+                            visited.add(str([parent, child]))        # visited.add(child)
 
-                            visited.add(str([parent, child, t_acc_min, t_acc_max]))         # visited.add(child)
-
-                            if t_acc_min <= cutoff_weight:
-                                # TODO
-                                # 1 to check
-                                # 2 如果算上后面的ovbservation怎么办
-                                if t_acc_max > cutoff_weight:
-                                    t_acc_max = cutoff_weight                               # is this way ok? 其实好像可以这么搞, 但是这个地方一定要 < 不能 <=, 因为这样可能可以在刚好t = cutoff的时候得到一个observation
-
-                                yield parent, child, t_acc_min, t_acc_max, l_attr, r_attr   # yield parent, child 这个版本的python没法调试yield  https://zhuanlan.zhihu.com/p/268605982
-                                stack.append((child, t_acc_min, t_acc_max, iter(G[child])))
+                            if acc_weight_min <= cutoff_weight:
+                                t_min_t = G.edge[parent][child][0]['t_min']             # t_min若大于cutoff则代表完全不可达
+                                t_max_t = G.edge[parent][child][0]['t_max']
+                                if acc_weight_min + t_min_t < cutoff_weight:
+                                    stack.append((child, acc_weight_min + t_min_t, acc_weight_max + t_max_t, iter(G[child])))
+                                elif acc_weight_min + t_min_t == cutoff_weight:
+                                    try:
+                                        if 'l_attr' in G.edge[parent][child][0].keys() and G.edge[parent][child][0]['l_attr'] == 'closed':
+                                            stack.append(
+                                                (child, acc_weight_min + t_min_t, acc_weight_max + t_max_t, iter(G[child])))
+                                        elif 'l_attr' not in G.edge[parent][child][0].keys():
+                                            stack.append(
+                                                (child, acc_weight_min + t_min_t, acc_weight_max + t_max_t, iter(G[child])))
+                                    except:
+                                        pass
+                            # elif acc_weight_min > cutoff_weight:
+                            #     pass
 
                 except StopIteration:
                     stack.pop()
@@ -614,7 +579,7 @@ class w_aic():
         return path_list
 
     def simple_shortest_longest_path_length(self, G0, source, target):
-        path_list = self.all_simple_paths2(G0, source, target)              # all_simple_path很不稳定, 会让算法解出问题
+        path_list = self.all_simple_paths2(G0, source, target)
 
         if target == '7':
             debug_var = 25
@@ -644,137 +609,6 @@ class w_aic():
 
         return min_val, max_val
 
-    def get_all_events_from_G(self, G):
-        event_list_t = []
-        for edge_t in G.edges(data=True):
-            event_list_t.append(edge_t[2]['event'])
-
-        event_list_t = list(set(event_list_t))
-        return event_list_t
-
-    def shortest_path_with_cost(self, G, start_node, end_node, accessible_events=None):
-        # Added
-        if accessible_events == None:
-            accessible_events = self.get_all_events_from_G(G)
-
-        # 用于记录从 start_node 到 end_node 的最短路径及其代价
-        shortest_path = []
-        min_cost = float('inf')         # 初始化最小代价为正无穷
-        is_finally_accessible = []      # 表示最重算到的最小值是否可以取得, 如果是开区间则无法取得
-
-        # 深度优先搜索递归函数，计算路径的代价
-        def dfs(v, path, cost, is_accessible):
-            nonlocal min_cost, shortest_path, is_finally_accessible
-
-            # 如果当前节点是终点，则检查路径代价
-            if v == end_node:
-                if cost < min_cost:
-                    min_cost = cost
-                    shortest_path = path.copy()  # 更新最短代价路径
-                    is_finally_accessible = is_accessible.copy()
-                return
-
-            # 遍历所有从 v 到邻居的边
-            for neighbor in G.neighbors(v):
-                for edge in G.get_edge_data(v, neighbor):  # 遍历所有从v到neighbor的边
-                    edge_event = G.get_edge_data(v, neighbor, edge)['event']
-                    edge_cost  = G.get_edge_data(v, neighbor, edge)['t_min']  # 获取当前边的 t_max 属性
-                    if 'l_attr' in G.get_edge_data(v, neighbor, edge).keys():
-                        l_attr_t = G.get_edge_data(v, neighbor, edge)['l_attr']
-                    else:
-                        l_attr_t = 'closed'             # left-closed by default
-
-                    # 只遍历未在当前路径中的邻居，避免环路
-                    if neighbor not in path:
-                        #
-                        if edge_event not in accessible_events:
-                            continue
-
-                        if l_attr_t == 'closed':
-                            is_accessible_t = True
-                        else:
-                            is_accessible_t = False
-                        #
-                        path.append(neighbor)
-                        is_accessible.append(is_accessible_t)                 # Added
-                        dfs(neighbor, path, cost + edge_cost, is_accessible)  # 累加 t_max 作为代价
-                        path.pop()  # 回溯
-                        is_accessible.pop()                                   # Added
-
-        # 从起始节点开始 DFS 搜索
-        dfs(start_node, [start_node], 0, [True])
-
-        is_min_cost_accessible = True
-        for i in is_finally_accessible:
-            if i == False:
-                is_min_cost_accessible = False
-                break
-
-        return shortest_path, min_cost, is_min_cost_accessible
-
-    def longest_path_with_cost(self, G, start_node, end_node, accessible_events=None):
-        # Added
-        if accessible_events == None:
-            accessible_events = self.get_all_events_from_G(G)
-
-        # 用于记录从 start_node 到 end_node 的所有路径及其代价
-        longest_path = []
-        max_cost = -float('inf')  # 初始化最大代价为负无穷
-        is_finally_accessible = []  # 表示最重算到的最大值是否可以取得, 如果是开区间则无法取得
-
-        # 记录每条路径的访问状态
-        visited = set()
-
-        # 深度优先搜索递归函数，计算路径的代价
-        def dfs(v, path, cost, is_accessible):
-            nonlocal max_cost, longest_path, is_finally_accessible
-
-            # 如果当前节点是终点，则检查路径代价
-            if v == end_node:
-                if cost > max_cost:
-                    max_cost = cost
-                    longest_path = path.copy()  # 更新最长代价路径
-                    is_finally_accessible = is_accessible.copy()
-                return
-
-            visited.add(v)
-
-            for neighbor in G.neighbors(v):
-                for edge in G.get_edge_data(v, neighbor):  # 遍历所有从v到neighbor的边
-                    edge_event = G.get_edge_data(v, neighbor, edge)['event']
-                    edge_cost = G.get_edge_data(v, neighbor, edge)['t_max']  # 获取当前边的 t_max 属性
-                    if 'r_attr' in G.get_edge_data(v, neighbor, edge).keys():
-                        r_attr_t = G.get_edge_data(v, neighbor, edge)['r_attr']
-                    else:
-                        r_attr_t = 'open'  # right-open by default
-                    if neighbor not in visited:
-                        #
-                        if edge_event not in accessible_events:
-                            continue
-                        if r_attr_t == 'closed':
-                            is_accessible_t = True
-                        else:
-                            is_accessible_t = False
-                            #
-                        path.append(neighbor)
-                        is_accessible.append(is_accessible_t)  # Added
-                        dfs(neighbor, path, cost + edge_cost, is_accessible)  # 累加 t_max 作为代价
-                        path.pop()  # 回溯
-                        is_accessible.pop()  # Added
-
-            visited.remove(v)
-
-        # 从起始节点开始 DFS 搜索
-        dfs(start_node, [start_node], 0, [True])        # 自己到自己认为是可达的, 所以第一次会是True
-
-        is_max_cost_accessible = True
-        for i in is_finally_accessible:
-            if i == False:
-                is_max_cost_accessible = False
-                break
-
-        return longest_path, max_cost, is_max_cost_accessible
-
     def calulate_loop_cost(self, G0, path_t):
         min_val_t = 0
         max_val_t = 0
@@ -787,95 +621,35 @@ class w_aic():
         return min_val_t, max_val_t
 
 
-    def dfstree2(self, iwa, event_list, event_uc, event_uo, source, t_cutoff=20):
-        edges = list(self.dfs_edges2(iwa, event_list, event_uc, event_uo, source, cutoff_weight=t_cutoff))      # [ (start, end, t_min_accumulated, t_max_accumulated, l_attr, r_attr), ... ]
+    def dfstree2(self, iwa, event_list, event_uc, event_uo, source, is_accumulate_cost=True, urloop_cutoff_weight=20):
+        edges = list(self.dfs_edges2(iwa, event_list, event_uc, event_uo, source, cutoff_weight=urloop_cutoff_weight))      # [(start, end, accumulated_cost), ...]
 
-        #
-        # Synthesize Reachibility Tree, i.e., no accumulation of transition cost
-        G0 = nx.MultiDiGraph()
-        G0.add_node(source)
+        if edges.__len__() > 25:
+            debug_var = 100
+
+        # for debugging
+        if source == '3':
+            print("233")
+
+        dfs_tree = nx.MultiDiGraph()
+        dfs_tree.add_node(source)
 
         for edge_t in edges:
             start = list(edge_t)[0]
             end   = list(edge_t)[1]
+            acc_cost_min = list(edge_t)[2]
+            acc_cost_max = list(edge_t)[3]
             try:
                 event = iwa.edge[start][end][0]['event']
                 #if event in event_list or (event in event_uo and event in event_uc):                                 # 计算路径长的时候不能过可观事件
                 #
                 # for debugging
                 if (event in event_list and event in event_uo) or (event in event_uo and event in event_uc):
-                    t_min  = iwa.edge[start][end][0]['t_min']
-                    t_max  = iwa.edge[start][end][0]['t_max']          # 用负值，得到的最短距离就是最长距离
-                    l_attr = iwa.edge[start][end][0]['l_attr']
-                    r_attr = iwa.edge[start][end][0]['r_attr']
-                    G0.add_edge(start, end, event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
+                    t_min = iwa.edge[start][end][0]['t_min'] + acc_cost_min
+                    t_max = iwa.edge[start][end][0]['t_max'] + acc_cost_max
+                    dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max)
             except:
                 pass
-
-        # for debugging
-        # TODO to remove
-        if source == '3':
-            debug_var = 99
-
-        # 2024.5.22
-        # step 2 计算最小-最大值
-        # step 3 求解是否存在环
-        # 2024.12.10
-        # 这些都不需要了, 现在accumulated value会在深度搜索时同时计算并且带出
-        min_max_val = dict()
-        for edge_t in edges:
-            #
-            u = edge_t[0]
-            v = edge_t[1]
-            #[min_cost_prime, max_cost_prime] = self.simple_shortest_longest_path_length(G0, source, u)      # 2024.12.7 Removed
-            min_cost_prime = edge_t[2]
-            max_cost_prime = edge_t[3]                                                                       #           From Depth-first-search
-            min_cost_prime = min_cost_prime + G0.edge[u][v][0]['t_min']
-            max_cost_prime = max_cost_prime + G0.edge[u][v][0]['t_max']
-
-            if str(edge_t) not in min_max_val.keys():
-                min_max_val[str(edge_t)] = [min_cost_prime, max_cost_prime]
-
-        dfs_tree = nx.MultiDiGraph()
-        for edge_t in edges:
-            start = list(edge_t)[0]
-            end   = list(edge_t)[1]
-
-            try:
-                event = iwa.edge[start][end][0]['event']
-                t_min = min_max_val[str(edge_t)][0]             # identical as before, the value is calculated by shortest-path-len
-                t_max = min_max_val[str(edge_t)][1]
-                l_attr = G0.edge[start][end][0]['l_attr']
-                r_attr = G0.edge[start][end][0]['r_attr']
-
-                if t_min > t_cutoff:
-                    t_min = t_cutoff
-                    l_attr = 'closed'
-                if t_max > t_cutoff:
-                    t_max = t_cutoff
-                    r_attr = 'open'
-
-                dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
-            except:
-                pass
-
-        # for debugging
-        if source == '3':
-            if event_list == ['a', 'b', 'o3']:
-                print_c("dfstree2: q0: %s, events %s / edges_obtained: %d" % (source, str(event_list), edges.__len__(),), color='bright_white', style='italic')
-
-                try:
-                    start_d = '7'
-                    end_d   = '3'
-                    for edge_index in dfs_tree.edge[start_d][end_d]:
-                        t_min_d = dfs_tree.edge[start_d][end_d][edge_index]['t_min']
-                        if t_min_d == 5.:
-                            print_c("dfs_tree.edge['7'] %s" % (str(dfs_tree.edge['7'], )), color='bright_green', style='italic')
-                        elif t_min_d == 6.5:
-                            print_c("dfs_tree.edge['7'] %s" % (str(dfs_tree.edge['7'], )), color='bright_yellow', style='italic')
-
-                except:
-                    pass
 
         return dfs_tree
 
@@ -924,44 +698,18 @@ class w_aic():
 
         return t_interval
 
-    def timeslice2(self, dfs_tree, source):
-        #
-        # 2024.12.10
-        # 加入开区间和闭区间后, 考虑尽量减少对原策略的改动
-        # 所以具体策略如下:
-        #   如果半开闭或者全闭, 则仍采用左开右闭
-        #   否则作为左区间时采用全开
+    def timeslice2(self, dfs_tree, source, urloop_cutoff_weight=20):
         event_c = self.event_c
         event_o = self.event_o
 
-        t_step      = []
-        t_attr_dict = dict()            # { t_1: [is_left_closed, is_right_closed], ... }
-        t_interval  = []
+        t_step = []
+        t_interval = []
         for edge_t in dfs_tree.edges():
-            t_min = 0
-            t_max = 0
             for j in dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]].keys():
                 t_min = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][j]['t_min']
                 t_max = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][j]['t_max']
                 t_step.append(t_min)
                 t_step.append(t_max)
-                #
-                # 2024.12.10
-                # Add区间
-                l_attr = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][j]['l_attr']
-                r_attr = dfs_tree.edge[list(edge_t)[0]][list(edge_t)[1]][j]['r_attr']
-                #
-                if t_min not in t_attr_dict.keys():
-                    t_attr_dict[t_min] = [ l_attr == 'closed', False ]               # Default: left-closed and right-open
-                else:
-                    is_left_closed = (l_attr == 'closed') or t_attr_dict[t_min][0]
-                    t_attr_dict[t_min] = [ is_left_closed, t_attr_dict[t_min][1] ]
-                #
-                if t_max not in t_attr_dict.keys():
-                    t_attr_dict[t_max] = [ False, r_attr == 'closed' ]               # 想了一下这边左边还是开的好
-                else:
-                    is_right_closed = (r_attr == 'closed') or t_attr_dict[t_max][1]
-                    t_attr_dict[t_max] = [ t_attr_dict[t_max][0], is_right_closed ]
 
             # added, IMPORTANT
             # assign additional time instant to timeslice from controllable & observable event
@@ -975,23 +723,6 @@ class w_aic():
                 if event_t_next in event_c and event_t_next in event_o:
                     t_step.append(t_min_next)
                     t_step.append(t_max_next)
-                    #
-                    # 2024.12.10
-                    # Add区间
-                    l_attr = edge_t_next[2]['l_attr']
-                    r_attr = edge_t_next[2]['r_attr']
-                    #
-                    if t_min_next not in t_attr_dict.keys():
-                        t_attr_dict[t_min_next] = [ l_attr == 'closed', False ]               # Default: left-closed and right-open
-                    else:
-                        is_left_closed = (l_attr == 'closed') or t_attr_dict[t_min_next][0]
-                        t_attr_dict[t_min_next] = [ is_left_closed, t_attr_dict[t_min_next][1] ]
-                    #
-                    if t_max_next not in t_attr_dict.keys():
-                        t_attr_dict[t_max_next] = [ False, r_attr == 'closed' ]               # 想了一下这边左边还是开的好
-                    else:
-                        is_right_closed = (r_attr == 'closed') or t_attr_dict[t_max_next][1]
-                        t_attr_dict[t_max_next] = [ t_attr_dict[t_max_next][0], is_right_closed ]
 
         #
         # for debugging
@@ -1004,46 +735,28 @@ class w_aic():
             if event_t_next in event_c and event_t_next in event_o:
                 t_step.append(t_min_next)
                 t_step.append(t_max_next)
-                #
-                # 2024.12.10
-                # Add区间
-                l_attr = edge_t_next[2]['l_attr']
-                r_attr = edge_t_next[2]['r_attr']
-                #
-                if t_min_next not in t_attr_dict.keys():
-                    t_attr_dict[t_min_next] = [l_attr == 'closed', False]  # Default: left-closed and right-open
-                else:
-                    is_left_closed = (l_attr == 'closed') or t_attr_dict[t_min_next][0]
-                    t_attr_dict[t_min_next] = [is_left_closed, t_attr_dict[t_min_next][1]]
-                #
-                if t_max_next not in t_attr_dict.keys():
-                    t_attr_dict[t_max_next] = [False, r_attr == 'closed']  # 想了一下这边左边还是开的好
-                else:
-                    is_right_closed = (r_attr == 'closed') or t_attr_dict[t_max_next][1]
-                    t_attr_dict[t_max_next] = [t_attr_dict[t_max_next][0], is_right_closed]
+
+        # added
+        # pop all cost larger than cutoff
+        t_larger_than_cutoff = []
+        for t in t_step:
+            if t > urloop_cutoff_weight:
+                t_larger_than_cutoff.append(t)
+        for t in t_larger_than_cutoff:
+            t_step.pop(t_step.index(t))
+        # don't remember to add cutoff
+        if t_larger_than_cutoff.__len__():
+            t_step.append(urloop_cutoff_weight)
 
         t_step = list(set(t_step))      # 排序，去除多余元素
         t_step.sort()
         for i in range(0, t_step.__len__() - 1):
-            if t_attr_dict[t_step[i]][0] or t_attr_dict[t_step[i]][1]:
-                left_attr_t = 'closed'
-            else:
-                left_attr_t = 'open'
-
-            t_interval.append((t_step[i], t_step[i + 1], left_attr_t, 'open'))       # 这里为了方便只检查左区间, 为了减少修改
+            t_interval.append((t_step[i], t_step[i + 1]))
         #t_interval.sort(key=sort_timeslice)
-
-        # for debugging
-        if source == '3':
-            len_t = t_interval.__len__()
-            if len_t == 9:
-                print_c(t_interval.__len__(), color='green')
-            if len_t == 8:
-                print_c(t_interval.__len__(), color='bright_magenta')
 
         return t_interval
 
-    def get_min_max_time_from_dfstree(self, B, source):
+    def get_min_max_time_from_dfstree(self, B, source, t_cutoff=20):
         # additional
         # get all minimal-maximal time for the events in a DfsTree
         event_c = self.event_c
@@ -1053,18 +766,25 @@ class w_aic():
         sc_t_max = {}
         for node_start in B.edge:
             for node_end in B.edge[node_start]:
-                # check edgess in DfsTree
-                event_t = B.edge[node_start][node_end][0]['event']
-                t_min = B.edge[node_start][node_end][0]['t_min']
-                t_max = B.edge[node_start][node_end][0]['t_max']
-                if event_t not in sc_t_min.keys():
-                    sc_t_min.update({event_t: t_min})
-                    sc_t_max.update({event_t: t_max})
-                else:
-                    if sc_t_min[event_t] > t_min:
-                        sc_t_min[event_t] = t_min
-                    if sc_t_max[event_t] < t_max:
-                        sc_t_max[event_t] = t_max
+                for edge_index_t in B.edge[node_start][node_end]:
+                    # check edgess in DfsTree
+                    event_t = B.edge[node_start][node_end][edge_index_t]['event']
+                    t_min = B.edge[node_start][node_end][edge_index_t]['t_min']
+                    t_max = B.edge[node_start][node_end][edge_index_t]['t_max']
+
+                    if t_min > t_cutoff:
+                        t_min = t_cutoff
+                    if t_max > t_cutoff:
+                        t_max = t_cutoff
+
+                    if event_t not in sc_t_min.keys():
+                        sc_t_min.update({event_t: t_min})
+                        sc_t_max.update({event_t: t_max})
+                    else:
+                        if sc_t_min[event_t] > t_min:
+                            sc_t_min[event_t] = t_min
+                        if sc_t_max[event_t] < t_max:
+                            sc_t_max[event_t] = t_max
 
                 # IMPORTANT
                 # ADDED: checked edge for controllable & observable successive edges which is NOT LISTED in DfsTree
@@ -1137,53 +857,35 @@ class w_aic():
                 # if the event is shared
                 # take all time interval in policy_1 and policy_2, then make conjunction for all time interval
                 t_interval_list = list(policy_dict_1[event_t] + policy_dict_2[event_t])
+                t_interval_conjuncted = []
 
+                t_interval_conjuncted.append(t_interval_list.pop())
 
-                t_numeraical_list = [ (elem[0], elem[1],) for elem in t_interval_list  ]
-                t_lattr_list = [elem[2] == 'open'  for elem in t_interval_list ]
-                t_rattr_list = [elem[3] == 'open' for elem in t_interval_list ]
+                while t_interval_list.__len__():
+                    t_interval_to_merge = t_interval_list.pop()
+                    t_min_1 = t_interval_to_merge[0]
+                    t_max_1 = t_interval_to_merge[1]
 
-                t_interval_conjuncted = intervals.union_of_half_open_intervals(t_numeraical_list, t_lattr_list, t_rattr_list)
-                for i in range(0, t_interval_conjuncted.__len__()):
-                    interval_t = list(t_interval_conjuncted[i])
-                    if interval_t[2]:
-                        interval_t[2] = 'open'
-                    else:
-                        interval_t[2] = 'closed'
-                    if interval_t[3]:
-                        interval_t[3] = 'open'
-                    else:
-                        interval_t[3] = 'closed'
-                    t_interval_conjuncted[i] = interval_t
+                    for index in range(0, t_interval_conjuncted.__len__()):
+                        t_interval_prime = t_interval_conjuncted[index]
+                        t_min_2 = t_interval_prime[0]
+                        t_max_2 = t_interval_prime[1]
 
-                # older version
-                # t_interval_conjuncted = []
-                # t_interval_conjuncted.append(t_interval_list.pop())
-                # while t_interval_list.__len__():
-                #     t_interval_to_merge = t_interval_list.pop()
-                #     t_min_1 = t_interval_to_merge[0]
-                #     t_max_1 = t_interval_to_merge[1]
-                #
-                #     for index in range(0, t_interval_conjuncted.__len__()):
-                #         t_interval_prime = t_interval_conjuncted[index]
-                #         t_min_2 = t_interval_prime[0]
-                #         t_max_2 = t_interval_prime[1]
-                #
-                #         # if the time interval is intersected
-                #         '''
-                #             |--    |    --  --    |    --  --    |    --|
-                #                 t_min_1 --.... t_min_2 ....-- t_max_1
-                #
-                #             |--    |    --  --    |    --  --    |    --|
-                #                 t_min_2 --.... t_min_1 ....-- t_max_2
-                #
-                #         '''
-                #         if (t_min_1 <= t_min_2 and t_min_2 <= t_max_1) or \
-                #            (t_min_2 <= t_min_1 and t_min_1 <= t_max_2):
-                #             t_interval_conjuncted[index][0] = min(t_min_1, t_min_2)
-                #             t_interval_conjuncted[index][1] = max(t_max_1, t_max_2)
-                #         else:
-                #             t_interval_conjuncted.append([t_min_1, t_max_1])
+                        # if the time interval is intersected
+                        '''
+                            |--    |    --  --    |    --  --    |    --|
+                                t_min_1 --.... t_min_2 ....-- t_max_1
+                        
+                            |--    |    --  --    |    --  --    |    --|
+                                t_min_2 --.... t_min_1 ....-- t_max_2                
+                        
+                        '''
+                        if (t_min_1 <= t_min_2 and t_min_2 <= t_max_1) or \
+                           (t_min_2 <= t_min_1 and t_min_1 <= t_max_2):
+                            t_interval_conjuncted[index][0] = min(t_min_1, t_min_2)
+                            t_interval_conjuncted[index][1] = max(t_max_1, t_max_2)
+                        else:
+                            t_interval_conjuncted.append([t_min_1, t_max_1])
 
                 policy_dict.update({event_t: t_interval_conjuncted})
 
@@ -1204,19 +906,12 @@ class w_aic():
             for t_interval in t_list:
                 t_min = t_interval[0]
                 t_max = t_interval[1]
-                l_attr = t_interval[2]
-                r_attr = t_interval[3]
-                policy.append((event_t, (t_min, t_max, l_attr, r_attr)))
+                policy.append((event_t, (t_min, t_max)))
 
-        # 2024.12.7 Added
-        policy_combined = tuple(set(list(policy)))              # to remove repeated items
-        # for debugging
-        # if policy_combined.__len__() < policy.__len__():
-        #     print_c("policy combined", color='yellow')
-
-        return tuple(policy_combined)
+        return tuple(policy)
 
     def unobservable_reach(self, current_state, policy):
+
         ur_node = []
         event_t = self.get_event_from_policy(policy)
 
@@ -1235,31 +930,11 @@ class w_aic():
                     event_c_t = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['event']
                     event_t_min = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_min']
                     event_t_max = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['t_max']
-                    l_attr_t    = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['l_attr']
-                    r_attr_t    = dfs_tree.edge[edge_t[0]][edge_t[1]][0]['r_attr']
 
                     is_control_policy_matched = False
                     for policy_t in policy:                                 # event_t_min >= policy_t[1][0]
-                        #
-                        if policy_t[1].__len__() > 2:
-                            l_attr_tc = list(policy_t)[1][2]
-                            r_attr_tc = list(policy_t)[1][3]
-                        else:
-                            # TODO, 检查有没有进来的
-                            l_attr_tc = 'closed'
-                            r_attr_tc = 'open'
-                        #
-                        # 2024.12.10
-                        # Older vision
-                        # if event_c_t in self.event_uo and \
-                        #    ((event_c_t == policy_t[0] and not self.is_interval_disjoint(event_t_min, event_t_max, policy_t[1][0], policy_t[1][1])) or \
-                        #     (event_c_t in self.event_uc and event_c_t in self.event_uo)):
-                        #     is_control_policy_matched = True
-                        #
-                        # New version
-                        is_intersected, intersected_interval = intervals.check_intersection_with_list((event_t_min, event_t_max, l_attr_t == 'open', r_attr_t == 'open'), [(policy_t[1][0], policy_t[1][0], l_attr_tc == 'open', r_attr_tc == 'open')])        # 注意这里的True和False和之前想法, is_open为True
                         if event_c_t in self.event_uo and \
-                           ((event_c_t == policy_t[0] and is_intersected != -1) or \
+                           ((event_c_t == policy_t[0] and not self.is_interval_disjoint(event_t_min, event_t_max, policy_t[1][0], policy_t[1][1])) or \
                             (event_c_t in self.event_uc and event_c_t in self.event_uo)):
                             is_control_policy_matched = True
                     if is_control_policy_matched:
@@ -1295,40 +970,15 @@ class w_aic():
                     for sc_t in sc:
                         event_t = list(sc_t)[0]
                         event_c_t = dfs_tree.edge[parent][child][0]['event']
-                        #
-                        t_min_t  = dfs_tree.edge[parent][child][0]['t_min']
-                        t_max_t  = dfs_tree.edge[parent][child][0]['t_max']
-                        if 'l_attr' in dfs_tree.edge[parent][child][0].keys():
-                            l_attr_t = dfs_tree.edge[parent][child][0]['l_attr']
-                        else:
-                            # TODO, 检查还有没有进来的
-                            l_attr_t = 'closed'                                     # left closed and right open by default
-                        if 'r_attr' in dfs_tree.edge[parent][child][0].keys():
-                            r_attr_t = dfs_tree.edge[parent][child][0]['r_attr']
-                        else:
-                            # TODO, 检查还有没有进来的
-                            r_attr_t = 'open'
-                        #
-                        t_min_tc   = list(sc_t)[1][0]                           # tc is for input control policy
-                        # t_max_tc = list(sc_t)[1][0]                           # On purpose, perhaps some issues with the older version code
-                        t_max_tc   = list(sc_t)[1][1]
-                        if sc_t.__len__() > 2:
-                            l_attr_tc = list(sc_t)[1][2]
-                            r_attr_tc = list(sc_t)[1][3]
-                        else:
-                            # TODO, 检查有没有进来的
-                            l_attr_tc = 'closed'
-                            r_attr_tc = 'open'
-                        #
-                        # 2024.12.10
-                        # Old version
-                        # if ((event_t == event_c_t and t_min_t <= t_min_tc and  self.is_interval_disjoint(t_min_t, t_max_t, t_min_tc, t_max_tc)) or        # not disjoint ?
-                        #     (event_c_t in event_uc and event_c_t in event_uo)):
-                        #     is_edge_reachable = True
-                        #     break
-                        # new version
-                        is_intersected, intersected_interval = intervals.check_intersection_with_list((t_min_tc, t_max_tc, l_attr_tc == 'open', r_attr_tc == 'open'), [(t_min_t, t_max_t, l_attr_t == 'open', r_attr_t == 'open')])        # 注意这里的True和False和之前想法, is_open为True
-                        if ((event_t == event_c_t and is_intersected != -1) or
+                        #t = list(sc_t)[1][0]
+                        #if ((event_t == event_c_t and dfs_tree.edge[parent][child][0]['t_min'] <= t and \
+                        #     event_t == event_c_t and dfs_tree.edge[parent][child][0]['t_max'] >  t) or
+                        #    (event_c_t in event_uc and event_c_t in event_uo)):
+                        t_min_t =  dfs_tree.edge[parent][child][0]['t_min']
+                        t_max_t =  dfs_tree.edge[parent][child][0]['t_max']
+                        t_min_tc = list(sc_t)[1][0]
+                        t_max_tc = list(sc_t)[1][0]
+                        if ((event_t == event_c_t and t_min_t <= t_min_tc and self.is_interval_disjoint(t_min_t, t_max_t, t_min_tc, t_max_tc)) or
                             (event_c_t in event_uc and event_c_t in event_uo)):
                             is_edge_reachable = True
                             break
@@ -1344,7 +994,7 @@ class w_aic():
                 except StopIteration:
                     stack.pop()
 
-    def observable_reach_star(self, z_state, current_y_state, t_cutoff=20):
+    def observable_reach_star(self, z_state, current_y_state):
         if self.state_type(z_state) != 'Z_state' or self.state_type(current_y_state) != 'Y_state':
             raise AssertionError('Must input correct state type')
 
@@ -1388,18 +1038,18 @@ class w_aic():
         '''
         # Data structure
         #
-        #   可达状态:    可观事件   初始状态1: min_cost, 区间状态; 初始状态2: min_cost, 区间状态;
+        #   可达状态:    可观事件   初始状态1: min_cost; 初始状态2: min_cost;
         # {
-        #   '7': {      o_1 : { 3 : { 1, 'closed' }, 5 : { 3, 'open' } }}
+        #   '7': {      o_1 : { 3 : { 1 }, 5 : { 3 } }}
         # }
 
         '''
-        min_time_dict, max_time_dict = self.find_min_max_time_for_Z_state(z_state, current_y_state, t_cutoff=t_cutoff)
-        min_time_dict, max_time_dict = self.remove_min_max_dict_w_issues(min_time_dict, max_time_dict)                      # 去掉不存在路径的初态-末态对的信息
+        min_time_dict, max_time_dict = self.find_min_max_time_for_Z_state(z_state, current_y_state)
+        min_time_dict, max_time_dict = self.remove_min_max_dict_w_issues(min_time_dict, max_time_dict)
 
         '''
             Data structure
-            {event_t : [(edge_end, (event_t_min, event_t_max, l_attr, r_attr))]}
+            {event_t : [(edge_end, (event_t_min, event_t_max))]}
         '''
         nx_star_un_merged = {}
 
@@ -1413,19 +1063,17 @@ class w_aic():
                 #
                 # for min max value
                 #
-                for src_node_nx in min_time_dict[tgt_node_nx][event_t].keys():      # 注意这个地方src_node_nx取出的是source_state, 相当于再算了一遍
+                for src_node_nx in min_time_dict[tgt_node_nx][event_t].keys():
                     #
-                    t_min_t = min_time_dict[tgt_node_nx][event_t][src_node_nx][0]           # src_node_nx对应初态
-                    t_max_t = max_time_dict[tgt_node_nx][event_t][src_node_nx][0]           # tgt_node_nx对应末态
-                    t_min_attr_t = min_time_dict[tgt_node_nx][event_t][src_node_nx][1]      # src和tgt不一定相邻但是一定可达, 不可达的前面删过一遍了
-                    t_max_attr_t = max_time_dict[tgt_node_nx][event_t][src_node_nx][1]
+                    t_min_t = min_time_dict[tgt_node_nx][event_t][src_node_nx]
+                    t_max_t = max_time_dict[tgt_node_nx][event_t][src_node_nx]
                     #
                     # calculate reachability
                     is_reachable = False
                     #
                     # case 1
                     # 从URTree判断可达性
-                    dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, src_node_nx)              # 注意scr_node_nx是source state, 不是min_time_dict.keys(), 用的是笨办法3
+                    dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, src_node_nx)
                     if dfs_tree.node.__len__():
                         # if the dfs_tree can be obtained
                         reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=src_node_nx))
@@ -1440,16 +1088,13 @@ class w_aic():
                             for state_rt in state_rt_list:
                                 if state_rt == edge_rt[0]:
                                     is_reachable = True
-                                    l_attr_original = t_min_attr_t                    # 如果不相邻, 则取值由dfs计算
-                                    r_attr_original = t_max_attr_t
                     #
                     # case 2
                     # 如果当前状态和目标状态相邻
                     for edge_rt in self.iwa.in_edges(tgt_node_nx):
                         if src_node_nx == edge_rt[0]:
                             is_reachable = True
-                            l_attr_original = self.iwa.edge[src_node_nx][tgt_node_nx][0]['l_attr']      # 如果相邻, 则取值直接获得
-                            r_attr_original = self.iwa.edge[src_node_nx][tgt_node_nx][0]['r_attr']
+
                     #
                     # for reachable states
                     # uncontrollable & observable
@@ -1460,20 +1105,12 @@ class w_aic():
                             # event_t_max = event_t_max + max_time_dict[state_t]  # min_time_dict[edge_start]
                             event_t_min = t_min_t
                             event_t_max = t_max_t
-                            if l_attr_original == 'closed' or t_min_attr_t == 'closed':
-                                l_attr_p = 'closed'
-                            else:
-                                l_attr_p = 'open'
-                            if r_attr_original == 'closed' or t_max_attr_t == 'closed':
-                                r_attr_p = 'closed'
-                            else:
-                               r_attr_p = 'open'
 
                             if event_t not in nx_star_un_merged.keys():
-                                nx_star_un_merged.update({event_t : [(tgt_node_nx, (event_t_min, event_t_max, l_attr_p, r_attr_p))]})
+                                nx_star_un_merged.update({event_t : [(tgt_node_nx, (event_t_min, event_t_max))]})
                                 #pass
                             else:
-                                nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max, l_attr_p, r_attr_p)))
+                                nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
                                 #pass
 
                         #
@@ -1481,9 +1118,6 @@ class w_aic():
                         elif event_t in self.event_o and event_t in self.event_c and event_t in event_in_policy:
                             enabled_t_min = self.get_policy_w_time(z_state)[event_t][0][0]
                             enabled_t_max = self.get_policy_w_time(z_state)[event_t][0][1]
-                            enabled_l_attr = self.get_policy_w_time(z_state)[event_t][0][2]
-                            enabled_r_attr = self.get_policy_w_time(z_state)[event_t][0][3]
-
 
                             # event_t_min = event_t_min + min_time_dict[state_t]              # min_time_dict[edge_start]
                             # event_t_max = event_t_max + max_time_dict[state_t]              # min_time_dict[edge_start]
@@ -1494,20 +1128,12 @@ class w_aic():
                             if event_t_min <= enabled_t_min and event_t_max >= enabled_t_max:
                                 event_t_min = max(event_t_min, enabled_t_min)
                                 event_t_max = min(event_t_max, enabled_t_max)
-                                if l_attr_original == 'closed' or t_min_attr_t == 'closed' and enabled_l_attr == 'closed':
-                                    l_attr_p = 'closed'
-                                else:
-                                    l_attr_p = 'open'
-                                if r_attr_original == 'closed' or t_max_attr_t == 'closed' and enabled_r_attr == 'closed':
-                                    r_attr_p = 'closed'
-                                else:
-                                    r_attr_p = 'open'
 
                                 if event_t not in nx_star_un_merged.keys():
-                                    nx_star_un_merged.update({event_t: [(tgt_node_nx, (event_t_min, event_t_max, l_attr_p, r_attr_p))]})
+                                    nx_star_un_merged.update({event_t: [(tgt_node_nx, (event_t_min, event_t_max))]})
                                 else:
                                     if (tgt_node_nx, (event_t_min, event_t_max)) not in nx_star_un_merged[event_t]:
-                                        nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max, l_attr_p, r_attr_p)))
+                                        nx_star_un_merged[event_t].append((tgt_node_nx, (event_t_min, event_t_max)))
 
 
         if nx_star_un_merged == {'o3': [('7', (3, 5.5)), ('3', (3, 5.5))]}:
@@ -1515,16 +1141,13 @@ class w_aic():
 
         '''
             nx_star: Data structure: 
-            [ ((state_1, state_2, ...), (event_t_1, t_1, t_2, 'closed', 'open')),
-              ((state_3, ),             (event_t_2, t_3, t_4, 'closed', 'open')),  
+            [ ((state_1, state_2, ...), (event_t_1, t_1, t_2)),
+              ((state_3, ), (event_t_2, t_3, t_4)),  
               ...
              ]
 
         '''
         nx_star = self.setprate_nx_star(nx_star_un_merged)
-
-        nx_star = self.constraint_observtion_w_cutoff(nx_star, t_cutoff)
-
 
         if nx_star == [(('4',), ('o2', (3, 4))), (('4',), ('o2', (4.5, 14))), (('3',), ('o1', (1, 13.25)))]:
             debug_var = 16
@@ -1563,16 +1186,14 @@ class w_aic():
                 reachable_state = observation_t[0]
                 t_min = observation_t[1][0]
                 t_max = observation_t[1][1]
-                l_attr = observation_t[1][2]
-                r_attr = observation_t[1][3]
 
                 if reachable_state not in interval_list.keys():
                     interval_list.update({reachable_state : dict()})
                 #
                 if event_t not in interval_list[reachable_state].keys():
-                    interval_list[reachable_state].update({ event_t: [(t_min, t_max, l_attr, r_attr )]})
+                    interval_list[reachable_state].update({ event_t: [(t_min, t_max, )]})
                 else:
-                    interval_list[reachable_state][event_t].append((t_min, t_max, l_attr, r_attr ))
+                    interval_list[reachable_state][event_t].append((t_min, t_max, ))
 
         #
         # 合并状态
@@ -1580,27 +1201,7 @@ class w_aic():
             for event_t in interval_list[reachable_state].keys():
                 #
                 interval_list_t = interval_list[reachable_state][event_t]
-                #
-                # old version
-                #interval_list_merged = self.merge_intervals(interval_list_t)
-                # 20241210
-                # new version
-                t_numeraical_list = [ (elem[0], elem[1],) for elem in interval_list_t  ]
-                t_lattr_list = [elem[2] == 'open'  for elem in interval_list_t ]
-                t_rattr_list = [elem[3] == 'open' for elem in interval_list_t ]
-                #
-                interval_list_merged = intervals.union_of_half_open_intervals(t_numeraical_list, t_lattr_list, t_rattr_list)
-                for i in range(0, interval_list_merged.__len__()):
-                    interval_t = list(interval_list_merged[i])
-                    if interval_t[2]:
-                        interval_t[2] = 'open'
-                    else:
-                        interval_t[2] = 'closed'
-                    if interval_t[3]:
-                        interval_t[3] = 'open'
-                    else:
-                        interval_t[3] = 'closed'
-                    interval_list_merged[i] = interval_t
+                interval_list_merged = self.merge_intervals(interval_list_t)            # TODO 正确性
                 #
                 interval_list[reachable_state][event_t] = interval_list_merged
 
@@ -1615,10 +1216,8 @@ class w_aic():
                     for interval_t in interval_list[reachable_state][event_t]:
                         t_min = interval_t[0]
                         t_max = interval_t[1]
-                        l_attr = interval_t[2]
-                        r_attr = interval_t[3]
 
-                        nx_star.append((tuple(reachable_state), (event_t, (t_min, t_max, l_attr, r_attr))))
+                        nx_star.append((tuple(reachable_state), (event_t, (t_min, t_max))))
         else:
             if nx_star_un_merged == {'o3': [('7', (3, 5.5)), ('3', (3, 5.5))]}:
                 debug_var = 19
@@ -1634,12 +1233,10 @@ class w_aic():
                         #
                         t_min = interval_t[0]
                         t_max = interval_t[1]
-                        l_attr = interval_t[2]
-                        r_attr = interval_t[3]
                         #
-                        if [reachable_state, event_t, t_min, t_max, l_attr, r_attr] in interval_visited:
+                        if [reachable_state, event_t, t_min, t_max] in interval_visited:
                             continue
-                        interval_visited.append([reachable_state, event_t, t_min, t_max, l_attr, r_attr])
+                        interval_visited.append([reachable_state, event_t, t_min, t_max])
 
                         # 存放所有有交集的状态
                         # 数据结构
@@ -1647,7 +1244,7 @@ class w_aic():
                         #   [state, t_min, t_max]
                         #   ]
                         interval_to_merge = []
-                        interval_to_merge.append([reachable_state, t_min, t_max, l_attr, r_attr])
+                        interval_to_merge.append([reachable_state, t_min, t_max])
 
                         # find possible intervals which intersects with the original interval
                         for reachable_state_prime in interval_list.keys():
@@ -1658,91 +1255,54 @@ class w_aic():
                             for interval_t_prime in interval_list[reachable_state_prime][event_t]:
                                 t_min_prime = interval_t[0]
                                 t_max_prime = interval_t[1]
-                                l_attr_prime = interval_t[2]
-                                r_attr_prime = interval_t[3]
 
-                                is_intersected, intersected_interval = intervals.check_intersection_with_list(
-                                    (t_min,      t_max,       l_attr == 'open',       r_attr == 'open'),
-                                    [(t_min_prime, t_max_prime, l_attr_prime == 'open', r_attr_prime == 'open')])
-                                is_connected = intervals.is_connected(
-                                    (t_min,          t_max,       l_attr == 'open',       r_attr == 'open'),
-                                    (t_min_prime,    t_max_prime, l_attr_prime == 'open', r_attr_prime == 'open'))
-
-                                #if not self.is_interval_disjoint(t_min, t_max, t_min_prime, t_max_prime):
-                                if (is_intersected != -1 or is_connected):
-                                    #
-                                    # 20241211
-                                    # 如果两个状态有相交或者相邻
+                                if not self.is_interval_disjoint(t_min, t_max, t_min_prime, t_max_prime):
+                                    # 如果两个状态有相交
                                     if [reachable_state_prime, event_t, t_min_prime, t_max_prime] not in interval_visited:
                                         # 且没有被计算过
                                         #
                                         # 加入待计算
-                                        to_merge_new = [reachable_state_prime, t_min_prime, t_max_prime, l_attr_prime, r_attr_prime]
-                                        interval_to_merge.append(to_merge_new)
+                                        interval_to_merge.append([reachable_state_prime, t_min_prime, t_max_prime])
                                         #
                                         # 已阅
-                                        interval_visited.append(to_merge_new)
+                                        interval_visited.append([reachable_state_prime, event_t, t_min_prime, t_max_prime])
 
                         # 合并状态
                         # 这里可以用timeslice的做法
                         # 根据上方的条件, 只要进来的区间全是相交的
                         timeslice_nx = []
-                        timeslice_attr_nx = dict()
                         for event_interval_t in interval_to_merge:
                             t_min_ts = event_interval_t[1]
                             t_max_ts = event_interval_t[2]
-                            l_attr_ts = event_interval_t[3]
-                            r_attr_ts = event_interval_t[4]
                             if t_min_ts not in timeslice_nx:
                                 timeslice_nx.append(t_min_ts)
                             if t_max_ts not in timeslice_nx:
                                 timeslice_nx.append(t_max_ts)
-                            #
-                            if t_min_ts not in timeslice_attr_nx.keys():
-                                timeslice_attr_nx[t_min_ts] = [l_attr_ts == 'closed', False]  # Default: left-closed and right-open
-                            else:
-                                is_left_closed = (l_attr_ts == 'closed') or timeslice_attr_nx[t_min_ts][0]
-                                timeslice_attr_nx[t_min_ts] = [is_left_closed, timeslice_attr_nx[t_min_ts][1]]
-                            #
-                            if t_max_ts not in timeslice_attr_nx.keys():
-                                timeslice_attr_nx[t_max_ts] = [False, r_attr_ts == 'closed']  # 想了一下这边左边还是开的好
-                            else:
-                                is_right_closed = (r_attr_ts == 'closed') or timeslice_attr_nx[t_max_ts][1]
-                                timeslice_attr_nx[t_max_ts] = [timeslice_attr_nx[t_max_ts][0], is_right_closed]
-
                         timeslice_nx = list(set(timeslice_nx))              # 去除多余元素
                         timeslice_nx.sort()                                 # 排序
                         # 重组区间
                         interval_new_nx = []
                         for i in range(1, timeslice_nx.__len__()):
-                            t_min_ts = timeslice_nx[i - 1]
-                            t_max_ts = timeslice_nx[i]
-                            l_attr_ts = 'closed' if timeslice_attr_nx[t_min_ts][0] else 'open'
-                            r_attr_ts = 'closed' if timeslice_attr_nx[t_max_ts][1] else 'open'
-                            interval_new_nx.append((t_min_ts, t_max_ts, l_attr_ts, r_attr_ts, ))
+                            t_min_ts = event_interval_t[1]
+                            t_max_ts = event_interval_t[2]
+                            interval_new_nx.append((t_min_ts, t_max_ts, ))
                         #
                         # 计算可达性
                         for interval_new_t in interval_new_nx:
                             t_min_ts = interval_new_t[0]
                             t_max_ts = interval_new_t[1]
-                            l_attr_ts = interval_new_t[2]
-                            r_attr_ts = interval_new_t[3]
                             state_list_ts = []
                             for event_interval_t in interval_to_merge:
                                 state_t   = event_interval_t[0]
                                 t_min_old = event_interval_t[1]
                                 t_max_old = event_interval_t[2]
-                                l_attr_old = event_interval_t[3]
-                                r_attr_old = event_interval_t[4]
 
-                                is_new_being_subset = intervals.is_subset([t_min_ts, t_max_ts, l_attr_ts == 'open', r_attr_ts == 'open'], [t_min_old, t_max_old, l_attr_old == 'open', r_attr_old == 'open'])
-                                # if t_min_ts >= t_min_old and t_max_ts <= t_max_old:
-                                if is_new_being_subset:
+                                if t_min_ts >= t_min_old and t_max_ts <= t_max_old:
                                     state_list_ts.append(state_t)
 
                             state_list_ts = list(set(state_list_ts))    # 去除多余元素
                             state_list_ts.sort()                        # 排序
-                            nx_star.append((tuple(state_list_ts), (event_t, (t_min_ts, t_max_ts, l_attr_ts, r_attr_ts))))
+                            nx_star.append((tuple(state_list_ts), (event_t, (t_min_ts, t_max_ts))))
 
                             if nx_star.__len__() > 1:
                                 debug_var = 21
@@ -1774,13 +1334,12 @@ class w_aic():
 
             return interval_list_merged
 
-    def is_state_listed(self, z_state, current_state, ur_list):
+    def is_state_listed(self, z_state, current_state):
         is_state_listed = False
         is_listed_state_with_the_same_y = False
         is_all_successive_policy_ending_later = True
-        is_all_successive_policy_intersected_or_connected = True
 
-        for state_t in self.w_aic.node:
+        for state_t in self.t_bts.node:
             #   1 the unobservable reach is identical
             #   2 the events in policies are identical
             #   3 the policies of controllable & observable events are identical (time must be identical)
@@ -1792,19 +1351,16 @@ class w_aic():
                 try:
                     #   4 is originated from the same Y-state
                     #   5 the cost is identical -> make sure state_t and z_state are the identical state
-                    #
-                    # if nx.dijkstra_path_length(self.w_aic, current_state, state_t) >= 0:
-                    #     is_listed_state_with_the_same_y = True
-                    # 20241210 new method
-                    y_list_4_state_t = [k for k, v in ur_list.items() if state_t in v]
-                    for y_t in y_list_4_state_t:
-                        if y_t == current_state:
-                            is_listed_state_with_the_same_y = True
-                    if is_listed_state_with_the_same_y:
+                    '''
+                    if nx.dijkstra_path_length(self.t_bts, current_state, state_t) >= 0 and \
+                       nx.dijkstra_path_length(self.t_bts, current_state, state_t) == nx.dijkstra_path_length(self.t_bts, current_state, z_state):
+                    '''
+                    # 这步错了（可能）, 有没有更好的办法
+                    if nx.dijkstra_path_length(self.t_bts, current_state, state_t) >= 0:
+                        is_listed_state_with_the_same_y = True
 
                         # 6 20230606: for successive states, the ending time of control policy must not be larger
-                        # 7 20241210: for successive states, the policies must be connected or intersected
-                        for edge_t in self.w_aic.out_edges(state_t):
+                        for edge_t in self.t_bts.out_edges(state_t):
                             ending_state_t = list(edge_t[1])
                             if not self.state_type(ending_state_t) == 'Z_state':
                                 continue
@@ -1814,42 +1370,14 @@ class w_aic():
 
                             try:
                                 for key_iter in list(policy_prime.keys()):
-                                    t_suc_min = policy_successor[key_iter][0][0]
-                                    t_suc_max = policy_successor[key_iter][0][1]
-                                    if policy_successor[key_iter][0].__len__() > 2:
-                                        t_suc_lattr = policy_successor[key_iter][0][2]
-                                        t_suc_rattr = policy_successor[key_iter][0][3]
-                                    else:
-                                        t_suc_lattr = 'closed'
-                                        t_suc_rattr = 'open'
-                                    #
-                                    t_p_min = policy_prime[key_iter][0][0]
-                                    t_p_max = policy_prime[key_iter][0][1]
-                                    if policy_prime[key_iter][0].__len__() > 2:
-                                        t_p_lattr = policy_successor[key_iter][0][2]
-                                        t_p_rattr = policy_successor[key_iter][0][3]
-                                    else:
-                                        t_p_lattr = 'closed'
-                                        t_p_rattr = 'open'
-
-                                    # condition 6
-                                    # if policy_successor[key_iter][0][1] <= policy_prime[key_iter][0][1]:
-                                    if t_suc_max <= t_p_max:
+                                    if policy_successor[key_iter][0][1] <= policy_prime[key_iter][0][1]:
                                         is_all_successive_policy_ending_later = False
                                         break
-
-                                    # condition 7
-                                    is_intersected, intersected_interval = intervals.check_intersection_with_list(
-                                        (t_suc_min, t_suc_max, t_suc_lattr == 'open', t_suc_rattr == 'open'),
-                                        [(t_p_min, t_p_max, t_p_lattr == 'open', t_p_rattr == 'open')])
-                                    is_connected = intervals.is_connected((t_suc_min, t_suc_max, t_suc_lattr == 'open', t_suc_rattr == 'open'), (t_p_min, t_p_max, t_p_lattr == 'open', t_p_rattr == 'open'))
-                                    if not (is_intersected != -1 or is_connected):
-                                        is_all_successive_policy_intersected_or_connected = False
                             except:
                                 print("policy error in is_state_listed ...")
                                 is_all_successive_policy_ending_later = False
-                                is_all_successive_policy_intersected_or_connected = False
                                 break
+
 
                         break
                     else:
@@ -1859,7 +1387,7 @@ class w_aic():
                 except nx.NetworkXNoPath as e:
                     pass
 
-        if is_state_listed and is_listed_state_with_the_same_y and is_all_successive_policy_ending_later and is_all_successive_policy_intersected_or_connected:
+        if is_state_listed and is_listed_state_with_the_same_y and is_all_successive_policy_ending_later:
             return [True, state_t]
         else:
             return [False, None]
@@ -1892,7 +1420,7 @@ class w_aic():
 
         return is_identical
 
-    def find_min_max_time_for_Z_state(self, z_state, current_y_state, t_cutoff=20):
+    def find_min_max_time_for_Z_state(self, z_state, current_y_state):
 
         policy          = z_state[1]
         event_in_policy = self.get_event_from_policy(policy)
@@ -1922,8 +1450,8 @@ class w_aic():
             # if not current_node in max_time_dict.keys():
             #     max_time_dict.update({current_node: 0})
 
-            edges_w_min_max_weight = list(self.dfs_edges2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, cutoff_weight=t_cutoff))
             dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
+            dfs_tree_no_accumulation = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, is_accumulate_cost=False)
 
             if '7' in dfs_tree.edge.keys() and '3' in dfs_tree.edge['7'].keys():
                 if dfs_tree.edge['7']['3'].__len__() >= 4:
@@ -1954,21 +1482,18 @@ class w_aic():
                             if current_node_z == '7' and edge_end == '7':
                                 debug_var = 14
 
-                        min_time_dict, max_time_dict = self.calculate_min_max_accumulated_cost_for_NX(current_node_z, edge_start, dfs_tree, edges_w_min_max_weight, min_time_dict, max_time_dict)
-                        min_time_dict, max_time_dict = self.calculate_min_max_accumulated_cost_for_NX(current_node_z, edge_end,   dfs_tree, edges_w_min_max_weight, min_time_dict, max_time_dict)
+                        min_time_dict, max_time_dict = self.calculate_min_max_accumulated_cost_for_NX(current_node_z, edge_start, dfs_tree_no_accumulation, min_time_dict, max_time_dict)
+                        min_time_dict, max_time_dict = self.calculate_min_max_accumulated_cost_for_NX(current_node_z, edge_end,   dfs_tree_no_accumulation, min_time_dict, max_time_dict)
             else:
                 # for possible observations from current state but no URTree calculated
                 for current_node_z in z_state[0]:
-                    min_time_dict, max_time_dict = self.calculate_min_max_accumulated_cost_for_NX(current_node_z, current_node_z, dfs_tree, edges_w_min_max_weight, min_time_dict, max_time_dict)
+                    min_time_dict, max_time_dict = self.calculate_min_max_accumulated_cost_for_NX(current_node_z, current_node_z, dfs_tree_no_accumulation, min_time_dict, max_time_dict)
 
         return min_time_dict, max_time_dict
 
-    def calculate_min_max_accumulated_cost_for_NX(self, current_state, state_to_calculate, dfs_tree, edge_w_time_in_dfs, min_time_dict, max_time_dict):
+    def calculate_min_max_accumulated_cost_for_NX(self, current_state, state_to_calculate, dfs_tree, min_time_dict, max_time_dict):
         # find states with successive states of observable events
         successor_edges = self.iwa.out_edges(state_to_calculate, data=True)
-
-        if current_state == '3':
-            debug_var = 102
 
         #
         # traverse all successors
@@ -1988,7 +1513,7 @@ class w_aic():
                     min_time_dict[edge_st_end].update({event_st_t: dict()})
                 #
                 if current_state not in min_time_dict[edge_st_end][event_st_t].keys():
-                    min_time_dict[edge_st_end][event_st_t].update({current_state: [1e6, 'open']})
+                    min_time_dict[edge_st_end][event_st_t].update({current_state: 1e6})
 
                 if not edge_st_end in max_time_dict.keys():
                     max_time_dict.update({edge_st_end: dict()})
@@ -1997,21 +1522,14 @@ class w_aic():
                     max_time_dict[edge_st_end].update({event_st_t: dict()})
                 #
                 if current_state not in max_time_dict[edge_st_end][event_st_t].keys():
-                    max_time_dict[edge_st_end][event_st_t].update({current_state: [-1, 'open']})
+                    max_time_dict[edge_st_end][event_st_t].update({current_state: -1})
 
 
                 # update t_min and t_max
-                if not dfs_tree.node.__len__():                                                                 # 其实和dfs_tree是一个东西
+                if not dfs_tree.node.__len__():
                     if current_state == state_to_calculate:
                         t_min_t = edge_st[2]['t_min']                                                                    # 打个补丁
                         t_max_t = edge_st[2]['t_max']
-                        if edge_st[2].__len__() > 2:
-                            l_attr_t = edge_st[2]['l_attr']
-                            r_attr_t = edge_st[2]['r_attr']
-                        else:
-                            # TODO
-                            l_attr_t = 'closed'
-                            r_attr_t = 'open'
                     else:
                         continue
                 else:
@@ -2022,39 +1540,9 @@ class w_aic():
                         # t_min_t = t_min_t + edge_st[2]['t_min']
                         # t_max_t = -nx.shortest_path_length(dfs_tree, current_state, state_to_calculate, weight='t_max')  # 同时为了方便计算, 这里的t_max取了负值
                         # t_max_t = t_max_t + edge_st[2]['t_max']                                                          # 其实是可以不用这么做的, 用原版的dfs_tree也能算, 但是这样好理解一些
-                        #
-                        # 2024.5
-                        # 这里为什么要用没有累加的dfs_tree (也就是dfs_tree)?
-                        # 因为这里既需要旧的可达范围, 有需要通过累计计算来获取最长距离, 所以不能用已累计的数据
-                        #[t_min_t, t_max_t] = self.simple_shortest_longest_path_length(dfs_tree, current_state, state_to_calculate)      # TODO to remove
-                        #
-                        accessible_events = self.get_all_events_from_G(dfs_tree)
-                        shortest_path_t, t_min_t, is_min_cost_accessible = self.shortest_path_with_cost(self.iwa, current_state, state_to_calculate, accessible_events)       # 20241209
-                        longest_path_t,  t_max_t, is_max_cost_accessible = self.longest_path_with_cost(self.iwa,  current_state, state_to_calculate, accessible_events)       # dfs method for shortest path
+                        [t_min_t, t_max_t] = self.simple_shortest_longest_path_length(dfs_tree, current_state, state_to_calculate)
                         t_min_t = t_min_t + edge_st[2]['t_min']
                         t_max_t = t_max_t + edge_st[2]['t_max']
-                        #
-                        # 20241210
-                        # 注意这里的边界策略和最短路径有关:
-                        #   最短路径里一个值达不到(为'open')就是达不到
-                        #   必须要全'closed'
-                        if edge_st[2].__len__() > 2:
-                            # TODO
-                            #
-                            l_attr_t = edge_st[2]['l_attr']
-                            r_attr_t = edge_st[2]['r_attr']
-                        else:
-                            # TODO
-                            l_attr_t = 'closed'
-                            r_attr_t = 'open'
-                        if l_attr_t == 'closed' and is_min_cost_accessible:
-                            l_attr_t = 'closed'
-                        else:
-                            l_attr_t = 'open'
-                        if r_attr_t == 'closed' and is_max_cost_accessible:
-                            r_attr_t = 'closed'
-                        else:
-                            r_attr_t = 'open'
                     except:
                         print("[Nx Star], no current state in edge")
                         print(dfs_tree.node)
@@ -2062,30 +1550,13 @@ class w_aic():
                         print(state_to_calculate)
                         continue
 
-                # 2024.12.11
-                # 我有一个问题, 就是如果在此处产生了多个观测, 结果会怎么样?
-                #   思考以后我认为没关系
-                #   因为min_time_dict里是限制了初始状态和最终状态的
-                #   但是初态和末态不相邻, 但可达, 因而如果出现多个观测, 则代表两条路径
-                #   所以这里的目的是求min-max距离
-                #   用以计算nx的观测区间
-                current_min_weight = min_time_dict[edge_st_end][event_st_t][current_state][0]
-                current_max_weight = max_time_dict[edge_st_end][event_st_t][current_state][0]
-                current_min_attr   = min_time_dict[edge_st_end][event_st_t][current_state][1]
-                current_max_attr   = max_time_dict[edge_st_end][event_st_t][current_state][1]
+                current_min_weight = min_time_dict[edge_st_end][event_st_t][current_state]
+                current_max_weight = max_time_dict[edge_st_end][event_st_t][current_state]
 
-                # for debugging
-                # if current_min_weight != 1e6 or current_max_weight != -1:
-                #     debug_var = 301
-
-                if current_min_weight > t_min_t:                                                    # min取已有的更小的
-                    min_time_dict[edge_st_end][event_st_t][current_state] = [t_min_t, l_attr_t]
-                elif current_min_weight == t_min_t and current_min_attr == 'open' and l_attr_t == 'closed':
-                    min_time_dict[edge_st_end][event_st_t][current_state][1] = 'closed'
-                if current_max_weight < t_max_t:                                                    # max取更大的
-                    max_time_dict[edge_st_end][event_st_t][current_state] = [t_max_t, r_attr_t]
-                elif current_max_weight == t_max_t and current_max_attr == 'open' and r_attr_t == 'closed':
-                    max_time_dict[edge_st_end][event_st_t][current_state][1] = 'closed'
+                if current_min_weight > t_min_t:
+                    min_time_dict[edge_st_end][event_st_t][current_state] = t_min_t
+                if current_max_weight < t_max_t:
+                    max_time_dict[edge_st_end][event_st_t][current_state] = t_max_t
 
         return min_time_dict, max_time_dict
 
@@ -2095,7 +1566,7 @@ class w_aic():
             state_to_pop = []
             for event_t in min_time_dict[tgt_node_nx].keys():
                 for state_t in max_time_dict[tgt_node_nx][event_t].keys():
-                    if min_time_dict[tgt_node_nx][event_t][state_t][0] == 1e6 and max_time_dict[tgt_node_nx][event_t][state_t][0] == -1:
+                    if min_time_dict[tgt_node_nx][event_t][state_t] == 1e6 and max_time_dict[tgt_node_nx][event_t][state_t] == -1:
                         state_to_pop.append(state_t)
                         debug_var = 14
 
@@ -2104,35 +1575,6 @@ class w_aic():
                     max_time_dict[tgt_node_nx][event_t].pop(state_t)
 
         return min_time_dict, max_time_dict
-
-    def constraint_observtion_w_cutoff(self, state_list, t_cutoff=20):
-        for i in range(0, state_list.__len__()):
-            state_t = state_list[i]
-            if state_t[1][1][0] > t_cutoff or state_t[1][1][1] > t_cutoff:
-                # 写一样的是为了减少代码重复
-                # 大多数时候这个代码不会执行
-                state_t = list(state_t)
-                state_t[1] = list(state_t[1])
-                state_t[1][1] = list(state_t[1][1])
-
-                if state_t[1][1][0] > t_cutoff:
-                    state_t[1][1][0] = t_cutoff
-                    # TODO
-                    l_attr = 'closed'
-
-                if state_t[1][1][1] > t_cutoff:
-                    state_t[1][1][1] = t_cutoff
-                    # TODO
-                    r_attr = 'open'
-
-                state_t[1][1] = tuple(state_t[1][1])
-                state_t[1] = tuple(state_t[1])
-                state_t = tuple(state_t)
-
-                #
-                state_list[i] = state_t
-
-        return state_list
 
     def replace_node_in_bts(self, node, node_prime):
 
@@ -2143,30 +1585,30 @@ class w_aic():
         in_states = []
         out_states = []
         # find all in edges for current node
-        for edge_start in self.w_aic.edge.keys():
-            for edge_end_t in self.w_aic.edge[edge_start]:
+        for edge_start in self.t_bts.edge.keys():
+            for edge_end_t in self.t_bts.edge[edge_start]:
                 if edge_end_t == node:
                     in_states.append(edge_start)
 
         # find all out edges for current node
-        for edge_end_t in self.w_aic.edge[node]:
+        for edge_end_t in self.t_bts.edge[node]:
             out_states.append(edge_end_t)
 
         # add new node to T-BTS
-        self.w_aic.add_node(node_prime)
+        self.t_bts.add_node(node_prime)
         # add connections for in nodes
         for node_t in in_states:
-            self.w_aic.add_edge(node_t, node_prime, control=node_prime[1])          # the edge added must be Y->Z, or Z->Z for node_prime is a Z_state, then the properities MUST be CONTROL
+            self.t_bts.add_edge(node_t, node_prime, control=node_prime[1])          # the edge added must be Y->Z, or Z->Z for node_prime is a Z_state, then the properities MUST be CONTROL
         # add connections for out nodes
         for node_t in out_states:
             if self.state_type(node_t) == 'Y_state':
-                observation_t = self.w_aic.edge[node][node_t][0]['observation']
-                self.w_aic.add_edge(node_prime, node_t, observation=observation_t)
+                observation_t = self.t_bts.edge[node][node_t][0]['observation']
+                self.t_bts.add_edge(node_prime, node_t, observation=observation_t)
             elif self.state_type(node_t) == 'Z_state':
-                self.w_aic.add_edge(node_prime, node_t, control=node_t[1])
+                self.t_bts.add_edge(node_prime, node_t, control=node_t[1])
 
         # finally, remove nodes
-        self.w_aic.remove_node(node)
+        self.t_bts.remove_node(node)
 
     def find_root_state_for_z_states(self, current_y_state, z_state, ur_from_this_y_state):
         # find a root node, and then add the new Z-state to T-BTS
@@ -2178,12 +1620,12 @@ class w_aic():
         root_state = current_y_state
         root_state_candidate = []
 
-        for state_t in self.w_aic.node:
+        for state_t in self.t_bts.node:
             if self.state_type(state_t) == 'Z_state':
                 try:
 
                     # 1 is from the same y-state
-                    #if nx.dijkstra_path_length(self.w_aic, current_y_state, state_t) >= 0:                  # 这步错了（可能）, 如果current_y_state -> state_t不通, 则不属于同一y-state, 有没有更好的办法
+                    #if nx.dijkstra_path_length(self.t_bts, current_y_state, state_t) >= 0:                  # 这步错了（可能）, 如果current_y_state -> state_t不通, 则不属于同一y-state, 有没有更好的办法
                     if state_t in ur_from_this_y_state:
                         event_state_t = set(self.get_policy_event(state_t))
                         event_z_state = set(self.get_policy_event(z_state))
@@ -2198,66 +1640,29 @@ class w_aic():
 
                             for event_t in policy_state_t_dict.keys():
                                 # find all minimal & maximal time in policy_state_t & policy_z_state
-                                #
-                                # 找到t_list_1中最大的
                                 t_list_1 = policy_state_t_dict[event_t]
                                 t_min_1 = t_list_1[0][0]
                                 t_max_1 = t_list_1[0][1]
-                                l_attr_1 = t_list_1[0][2]
-                                r_attr_1 = t_list_1[0][3]
                                 for t_interval in t_list_1:
                                     t_min_prime = t_interval[0]
                                     t_max_prime = t_interval[1]
-                                    l_attr_prime = t_interval[2]
-                                    r_attr_prime = t_interval[3]
-                                    #
-                                    # 20241211, Added
                                     if t_min_prime < t_min_1:
                                         t_min_1 = t_min_prime
-                                        l_attr_1 = l_attr_prime
-                                    elif t_min_prime == t_min_1 and l_attr_1 == 'open':
-                                        l_attr_1 = l_attr_prime
                                     if t_max_prime > t_max_1:
                                         t_max_1 = t_max_prime
-                                        r_attr_1 = r_attr_prime
-                                    elif t_max_prime == t_max_1 and r_attr_1 == 'open':
-                                        r_attr_1 = r_attr_prime
 
-                                #
-                                # 找到t_list_2中最大的
                                 t_list_2 = policy_z_state_dict[event_t]
                                 t_min_2 = t_list_2[0][0]
                                 t_max_2 = t_list_2[0][1]
-                                l_attr_2 = t_list_2[0][2]
-                                r_attr_2 = t_list_2[0][3]
                                 for t_interval in t_list_2:
                                     t_min_prime = t_interval[0]
                                     t_max_prime = t_interval[1]
-                                    l_attr_prime = t_interval[2]
-                                    r_attr_prime = t_interval[3]
-                                    #
-                                    # 20241211, Added
                                     if t_min_prime < t_min_2:
                                         t_min_2 = t_min_prime
-                                        l_attr_2 = l_attr_prime
-                                    elif t_min_prime == t_min_2 and l_attr_2 == 'open':
-                                        l_attr_2 = l_attr_prime
                                     if t_max_prime > t_max_2:
                                         t_max_2 = t_max_prime
-                                        r_attr_2 = r_attr_prime
-                                    elif t_max_prime == t_max_2 and r_attr_2 == 'open':
-                                        r_attr_2 = r_attr_prime
 
-                                # 只要最大的最小, 那么其他的也一定最小
-                                # 注意这里最后算出来的东西不一定是区间, 可能是两个区间的组合, 比如t_min_1和t_max_1来自两个区间
                                 if not (t_min_1 <= t_min_2 and t_max_1 <= t_max_2):
-                                    is_all_time_interval_smaller = False
-                                    break
-                                # Added
-                                elif t_min_1 == t_min_2 and l_attr_1 == 'closed' and l_attr_2 == 'open':
-                                    is_all_time_interval_smaller = False
-                                    break
-                                elif t_max_1 == t_max_2 and r_attr_1 == 'closed' and r_attr_2 == 'open':
                                     is_all_time_interval_smaller = False
                                     break
 
@@ -2278,23 +1683,18 @@ class w_aic():
                 # take the maximal time into account
                 policy_state_t_dict = self.get_policy_w_time(state_t)
                 time_t = 0
-                t_max_attr = 'open'
                 for event_t in policy_state_t_dict.keys():
                     t_list = policy_state_t_dict[event_t]
                     t_max = t_list[0][1]
-                    t_max_attr = t_list[0][3]
                     for t_interval in t_list:
-                        t_max_prime  = t_interval[1]
-                        t_max_attr_p = t_interval[3]
+                        t_max_prime = t_interval[1]
                         if t_max_prime > t_max:
                             t_max = t_max_prime                 # find the maximal time in all the time interval from event_t
-                            t_max_attr = t_max_attr_p
-                        elif t_max_prime == t_max and t_max_attr_p == 'closed' and t_max_attr == 'open':
-                            t_max_attr = 'closed'
+
                     time_t += t_max
 
                 #
-                candidate_event_time.append([state_t, number_of_events, time_t, t_max_attr])
+                candidate_event_time.append([state_t, number_of_events, time_t])
 
             candidate_event_time.sort(key=functools.cmp_to_key(sort_root_state), reverse=True)
             root_state = candidate_event_time[0][0]
@@ -2305,7 +1705,7 @@ class w_aic():
 
     def assign_node_colors(self, init_marker_rgb='#DC5712', y_state_rgb='#83AF9B', z_state_rgb='#FE4365'):
         values = []
-        for node_t in self.w_aic.nodes():
+        for node_t in self.t_bts.nodes():
             if node_t == ('init',):
                 values.append(init_marker_rgb)
             elif self.state_type(node_t) == 'Z_state':
@@ -2315,13 +1715,13 @@ class w_aic():
         return values
 
     def plot(self, init_marker_rgb='#DC5712', y_state_rgb='#83AF9B', z_state_rgb='#FE4365', is_show=True):
-        self.w_aic.add_edge(('init',), tuple(self.init_state))
+        self.t_bts.add_edge(('init',), tuple(self.init_state))
         node_color = self.assign_node_colors(init_marker_rgb, y_state_rgb, z_state_rgb)
 
-        pos = nx.shell_layout(self.w_aic)  # nx.spectral_layout(bts) shell_layout spring_layout
-        nx.draw(self.w_aic, pos=pos, with_labels=True, node_color=node_color, font_size=8.5)
+        pos = nx.shell_layout(self.t_bts)  # nx.spectral_layout(bts) shell_layout spring_layout
+        nx.draw(self.t_bts, pos=pos, with_labels=True, node_color=node_color, font_size=8.5)
 
-        nx.draw_networkx_edge_labels(self.w_aic, pos, font_size=6.5)  # font_size=4.5
+        nx.draw_networkx_edge_labels(self.t_bts, pos, font_size=6.5)  # font_size=4.5
 
         if is_show:
             plt.show()
@@ -2339,13 +1739,13 @@ class w_aic():
         supervisor_list = []
         target = []
 
-        for node_t in self.w_aic.nodes():
+        for node_t in self.t_bts.nodes():
             # if self.state_type(node_t) == 'Z_state':
             #    target.append(node_t)
             target.append(node_t)
 
         for target_t in target:
-            supervisor_t = self.all_simple_paths2(self.w_aic, tuple(self.init_state), target_t)
+            supervisor_t = self.all_simple_paths2(self.t_bts, tuple(self.init_state), target_t)
             for supervisor_t_t in supervisor_t:
                 supervisor_list.append(supervisor_t_t)
 
@@ -2385,7 +1785,7 @@ class w_aic():
                         add q' in remove list
         '''
         q_rev_list = []
-        for node_t in self.w_aic.nodes():
+        for node_t in self.t_bts.nodes():
             if self.state_type(node_t) == 'Z_state':
                 q_rev_num = 0
                 for state_t in list(node_t[0]):
@@ -2400,27 +1800,27 @@ class w_aic():
             state_to_remove.append(q_rev)
 
             if self.state_type(q_rev) == 'Z_state':
-                pred_list = self.get_predecessor(self.w_aic, q_rev)
+                pred_list = self.get_predecessor(self.t_bts, q_rev)
                 for node_t in pred_list:
                     if self.state_type(node_t) == 'Y_state':
-                        if self.w_aic.edge[node_t].__len__() <= 1:
+                        if self.t_bts.edge[node_t].__len__() <= 1:
                             q_rev_list.append(node_t)
                     else:
                         remaining_post_states_to_remove = 0
-                        for post_t in self.w_aic.edge[node_t]:        # if the states in pre_post are ALL going to remove
+                        for post_t in self.t_bts.edge[node_t]:        # if the states in pre_post are ALL going to remove
                             if post_t == q_rev or post_t in q_rev_list:
                                 remaining_post_states_to_remove += 1
-                        if self.w_aic.edge[node_t].__len__() <= remaining_post_states_to_remove:
+                        if self.t_bts.edge[node_t].__len__() <= remaining_post_states_to_remove:
                             q_rev_list.append(node_t)
 
             else:
-                pred_list = self.get_predecessor(self.w_aic, q_rev)
+                pred_list = self.get_predecessor(self.t_bts, q_rev)
                 for node_t in pred_list:
                     state_to_remove.append(node_t)
 
         for node_t in state_to_remove:
             try:
-                self.w_aic.remove_node(node_t)
+                self.t_bts.remove_node(node_t)
             except:
                 pass
 

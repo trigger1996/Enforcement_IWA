@@ -7,6 +7,7 @@ from itertools import combinations, product
 from heapq import heappush, heappop
 from itertools import count
 from collections import Counter
+from utils import print_c
 import functools
 
 import matplotlib.pyplot as plt
@@ -342,7 +343,7 @@ class t_bts():
                 if y_state_t not in y_stack:
                     y_stack.append(y_state_t)
 
-            print('iter completed once!')
+            print_c('iter completed once!, state number: %d' % (self.t_bts.node.__len__(), ), color='blue')
 
         print('T-BTS constructed!')
 

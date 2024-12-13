@@ -3,7 +3,7 @@
 from opacity_iwa.t_aic_2 import t_aic
 from opacity_iwa.t_aic_3 import t_bts
 import control_2_trajectory
-
+from utils import print_c
 from random import randint
 
 event_uo = ['a',  'b',  'uc']
@@ -21,7 +21,7 @@ def main():
 
     supervisor_2 = t_bts_2.find_all_supervisor(is_print=True)
 
-
+    print_c("[TAC2024.Original] number of states W_AIC %d" % (t_bts_2.t_bts.node.__len__(),), color="green", style="bold")
     #t_aic_1.plot()
     t_bts_2.plot()
 
