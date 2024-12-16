@@ -28,3 +28,4 @@ graph:
   - ['5',  '7',  {event: uc, t_min: 1.5, t_max: 3,    l_attr: 'closed', r_attr: 'open'}]
   - ['6',  '4',  {event: o2, t_min: 3,   t_max: 4,    l_attr: 'closed', r_attr: 'open'}]
   - ['7',  '3',  {event: a, t_min:  1,   t_max: 3,    l_attr: 'closed', r_attr: 'open'}]
+  - ['5',  '4',  {event: o1, t_min: 0.5, t_max: 1,    l_attr: 'closed', r_attr: 'open'}]

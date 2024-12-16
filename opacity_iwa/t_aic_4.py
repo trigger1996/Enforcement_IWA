@@ -271,16 +271,11 @@ class w_aic():
 
             # obtain Unobservable reaches
             for policy_t in sc_timed:
-                z_state_t = self.unobservable_reach(current_state, policy_t)
+                z_state_t = self.unobservable_reach(current_state, policy_t, t_cutoff=t_cutoff)
 
-                # for debugging
-                if z_state_t == (('3', '5', '7'), (('a', (4, 7)),)) or z_state_t == (('3', '5', '7'), (('a', (2.5, 4)),)):
-                    debug_var = 3
-
-                if ('3', '5', '7') in z_state_t:
-                    # self.unobservable_reach(current_state, policy_t)
-                    debug_var = 4                                                                                    # # 20230606 Added, for debugging
-
+                # added
+                if z_state_t == (('3', '5', '6', '7'), (('a', (9.0, 10, 'closed', 'open')), ('b', (4, 5.0, 'closed', 'open')))):
+                    debug_var = 2
 
                 # check the existence for current z_state
                 # if a z-state is listed:
@@ -289,10 +284,14 @@ class w_aic():
                 #   3 the policies of controllable & observable events are identical (time must be identical)
                 #   4 is originated from the same Y-state
                 #   5 20230606: for successive states, the ending time of control policy must not be larger
-                [is_z_state_listed, z_state_prime] = self.is_state_listed(z_state_t, current_state, ur_list)                         # [is_listed, original_state_in_t_bts]
+                [is_z_state_listed, z_state_prime] = self.is_state_listed(z_state_t, current_state, ur_list)                            # [is_listed, original_state_in_t_bts]
 
-                if z_state_t not in visited:                                                                                         # 20230606 Added
-                # if True:                                                                                                           # can be enabled for debugging
+                if z_state_t == (('3', '5', '6', '7'), (('a', (9.0, 10, 'closed', 'open')), ('b', (4, 5.0, 'closed', 'open')))):
+                    if z_state_t not in visited:
+                        debug_var = 2
+
+                if z_state_t not in visited:                                                                                          # 20230606 Added
+                # if True:                                                                                                                # can be enabled for debugging
                     if is_z_state_listed:
 
                         policy_extended = self.conjunction_of_policies(z_state_t[1], z_state_prime[1])
@@ -304,6 +303,7 @@ class w_aic():
                             ur_list[current_state] = [ z_state_extended ]
                         else:
                             ur_list[current_state].append(z_state_extended)
+                        ur_list[current_state] = list(set(ur_list[current_state]))
                     else:
                         # find a root node, and then add the new Z-state to T-BTS
                         # the root node must satisfy
@@ -323,6 +323,7 @@ class w_aic():
                             ur_list[current_state] = [ z_state_t ]
                         else:
                             ur_list[current_state].append(z_state_t)
+                        ur_list[current_state] = list(set(ur_list[current_state]))
 
                     # for debugging
                     debug_state_t = (('3', '5', '7'), (('a', (2.5, 7)), ('b', (7, 10))))
@@ -790,6 +791,10 @@ class w_aic():
     def dfstree2(self, iwa, event_list, event_uc, event_uo, source, t_cutoff=20):
         edges = list(self.dfs_edges2(iwa, event_list, event_uc, event_uo, source, cutoff_weight=t_cutoff))      # [ (start, end, t_min_accumulated, t_max_accumulated, l_attr, r_attr), ... ]
 
+        # for debugging
+        if source == '3' and event_list == ['a', 'b', 'o3']:
+            debug_var = 100
+
         #
         # Synthesize Reachibility Tree, i.e., no accumulation of transition cost
         G0 = nx.MultiDiGraph()
@@ -829,9 +834,9 @@ class w_aic():
             v = edge_t[1]
             #[min_cost_prime, max_cost_prime] = self.simple_shortest_longest_path_length(G0, source, u)      # 2024.12.7 Removed
             min_cost_prime = edge_t[2]
-            max_cost_prime = edge_t[3]                                                                       #           From Depth-first-search
-            min_cost_prime = min_cost_prime + G0.edge[u][v][0]['t_min']
-            max_cost_prime = max_cost_prime + G0.edge[u][v][0]['t_max']
+            max_cost_prime = edge_t[3]                                                                       # From Depth-first-search
+            #min_cost_prime = min_cost_prime + G0.edge[u][v][0]['t_min']                                     # 20241213, no need
+            #max_cost_prime = max_cost_prime + G0.edge[u][v][0]['t_max']
 
             if str(edge_t) not in min_max_val.keys():
                 min_max_val[str(edge_t)] = [min_cost_prime, max_cost_prime]
@@ -855,7 +860,8 @@ class w_aic():
                     t_max = t_cutoff
                     r_attr = 'open'
 
-                dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
+                if not self.is_with_edge(dfs_tree, start, end, t_min, t_max, l_attr, r_attr):
+                   dfs_tree.add_edge(start, end, event=event, t_min=t_min, t_max=t_max, l_attr=l_attr, r_attr=r_attr)
             except:
                 pass
 
@@ -1146,7 +1152,7 @@ class w_aic():
                 t_interval_conjuncted = intervals.union_of_half_open_intervals(t_numeraical_list, t_lattr_list, t_rattr_list)
                 for i in range(0, t_interval_conjuncted.__len__()):
                     interval_t = list(t_interval_conjuncted[i])
-                    if interval_t[2]:
+                    if interval_t[2]:               # Bool -> str
                         interval_t[2] = 'open'
                     else:
                         interval_t[2] = 'closed'
@@ -1154,7 +1160,7 @@ class w_aic():
                         interval_t[3] = 'open'
                     else:
                         interval_t[3] = 'closed'
-                    t_interval_conjuncted[i] = interval_t
+                    t_interval_conjuncted[i] = interval_t.copy()
 
                 # older version
                 # t_interval_conjuncted = []
@@ -1216,14 +1222,14 @@ class w_aic():
 
         return tuple(policy_combined)
 
-    def unobservable_reach(self, current_state, policy):
+    def unobservable_reach(self, current_state, policy, t_cutoff=10):
         ur_node = []
         event_t = self.get_event_from_policy(policy)
 
         for current_node in current_state:
             ur_node.append(current_node)
 
-            dfs_tree = self.dfstree2(self.iwa, event_t, self.event_uc, self.event_uo, current_node)
+            dfs_tree = self.dfstree2(self.iwa, event_t, self.event_uc, self.event_uo, current_node, t_cutoff=t_cutoff)
             if dfs_tree.node.__len__():
                 reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=current_node))
 
@@ -1257,7 +1263,7 @@ class w_aic():
                         #     is_control_policy_matched = True
                         #
                         # New version
-                        is_intersected, intersected_interval = intervals.check_intersection_with_list((event_t_min, event_t_max, l_attr_t == 'open', r_attr_t == 'open'), [(policy_t[1][0], policy_t[1][0], l_attr_tc == 'open', r_attr_tc == 'open')])        # 注意这里的True和False和之前想法, is_open为True
+                        is_intersected, intersected_interval = intervals.check_intersection_with_list((event_t_min, event_t_max, l_attr_t == 'open', r_attr_t == 'open'), [(policy_t[1][0], policy_t[1][1], l_attr_tc == 'open', r_attr_tc == 'open')])        # 注意这里的True和False和之前想法, is_open为True
                         if event_c_t in self.event_uo and \
                            ((event_c_t == policy_t[0] and is_intersected != -1) or \
                             (event_c_t in self.event_uc and event_c_t in self.event_uo)):
@@ -1425,7 +1431,7 @@ class w_aic():
                     #
                     # case 1
                     # 从URTree判断可达性
-                    dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, src_node_nx)              # 注意scr_node_nx是source state, 不是min_time_dict.keys(), 用的是笨办法3
+                    dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, src_node_nx, t_cutoff=t_cutoff)              # 注意scr_node_nx是source state, 不是min_time_dict.keys(), 用的是笨办法3
                     if dfs_tree.node.__len__():
                         # if the dfs_tree can be obtained
                         reachable_edge = list(self.dfs_ur(dfs_tree, policy, self.event_uc, self.event_uo, source=src_node_nx))
@@ -1781,6 +1787,25 @@ class w_aic():
         is_all_successive_policy_intersected_or_connected = True
 
         for state_t in self.w_aic.node:
+
+            # for debugging
+            if current_state == ('3', '7'):
+                if z_state == (('3', '5', '6', '7'), (('a', (9.0, 10, 'closed', 'open')), ('b', (5.5, 6.0, 'closed', 'open')))):
+                    debug_var = 3
+                    # for debugging
+                    if state_t == (('3', '5', '6', '7'), (('a', (9.0, 10, 'closed', 'open')), ('b', (5.0, 5.5, 'closed', 'open')))):
+                        debug_var = 301
+                    if state_t == (('3', '5', '6', '7'), (('a', (9.0, 10, 'closed', 'open')), ('b', (4, 5.0, 'closed', 'open')))):
+                        debug_var = 302
+                    if state_t[0] == ('3', '5', '6', '7'):
+                        debug_var = 304
+                elif z_state == (('3', '5', '6', '7'), (('a', (9.0, 10, 'closed', 'open')), ('b', (4, 5.0, 'closed', 'open')))):
+                    debug_var = 303
+            elif z_state[0] == ('3', '5', '6', '7'):
+                    debug_var = 304
+            if state_t == (('3', '5', '6', '7'), (('b', (5, 7.0, 'closed', 'open')), ('a', (8.5, 10, 'closed', 'open')))):
+                debug_var = 303
+
             #   1 the unobservable reach is identical
             #   2 the events in policies are identical
             #   3 the policies of controllable & observable events are identical (time must be identical)
@@ -1834,9 +1859,9 @@ class w_aic():
 
                                     # condition 6
                                     # if policy_successor[key_iter][0][1] <= policy_prime[key_iter][0][1]:
-                                    if t_suc_max <= t_p_max:
+                                    if t_suc_max < t_p_max:                                    # t_suc_max <= t_p_max: <= is modified to <
                                         is_all_successive_policy_ending_later = False
-                                        break
+                                        continue
 
                                     # condition 7
                                     is_intersected, intersected_interval = intervals.check_intersection_with_list(
@@ -1858,6 +1883,12 @@ class w_aic():
 
                 except nx.NetworkXNoPath as e:
                     pass
+
+        # for debugging
+        if current_state == ('3', '7'):
+            pass
+        elif z_state[0] == ('3', '5', '6', '7'):
+            debug_var = 304
 
         if is_state_listed and is_listed_state_with_the_same_y and is_all_successive_policy_ending_later and is_all_successive_policy_intersected_or_connected:
             return [True, state_t]
@@ -1923,7 +1954,7 @@ class w_aic():
             #     max_time_dict.update({current_node: 0})
 
             edges_w_min_max_weight = list(self.dfs_edges2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, cutoff_weight=t_cutoff))
-            dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node)
+            dfs_tree = self.dfstree2(self.iwa, event_in_policy, self.event_uc, self.event_uo, current_node, t_cutoff=t_cutoff)
 
             if '7' in dfs_tree.edge.keys() and '3' in dfs_tree.edge['7'].keys():
                 if dfs_tree.edge['7']['3'].__len__() >= 4:
@@ -2334,6 +2365,35 @@ class w_aic():
                 predecessor_list.append(node_t)
 
         return predecessor_list
+
+    def is_with_edge(self, G, u, v, t_min, t_max, l_attr, r_attr):
+        """
+        检查图G中是否存在一条从u到v的边，并且边的属性满足t_min, t_max, l_attr, r_attr的条件。
+
+        Parameters:
+        - G: 图对象
+        - u, v: 边的起点和终点
+        - t_min, t_max: 边的时间范围属性
+        - l_attr, r_attr: 起点和终点的状态（'closed' 或 'open'）
+
+        Returns:
+        - True: 如果图中存在满足条件的边
+        - False: 否则
+        """
+        # 获取起点u到终点v之间的所有边
+        edges = G.get_edge_data(u, v)
+
+        if edges is None:
+            return False  # 如果没有边连接 u 和 v，返回 False
+
+        # 遍历所有边，并检查属性是否匹配
+        for key, edge_data in edges.items():
+            # 检查边的属性是否符合条件
+            if (edge_data['t_min'] == t_min and edge_data['t_max'] == t_max and
+                    edge_data['l_attr'] == l_attr and edge_data['r_attr'] == r_attr):
+                return True  # 如果找到匹配的边，返回 True
+
+        return False  # 如果没有找到匹配的边，返回 False
 
     def find_all_supervisor(self, is_print=True):
         supervisor_list = []
