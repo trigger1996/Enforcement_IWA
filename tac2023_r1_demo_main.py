@@ -18,7 +18,7 @@ def main():
 
     w_aic_2.construct_W_AIC(t_cutoff=10)
 
-    #w_aic_2.remove_all_revealing_states()
+    w_aic_2.remove_all_revealing_states()
 
     supervisor_2 = w_aic_2.find_all_supervisor(is_print=True)
 

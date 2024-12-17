@@ -281,7 +281,7 @@ def union_of_half_open_intervals(intervals, left_open, right_open):
 
             # 更新merged_intervals中的最后一个区间
             merged_intervals[-1] = (new_start, new_end, new_left_open, new_right_open)
-        elif prev_end == start and (prev_left == False or prev_right == False):
+        elif prev_end == start and (prev_right == False or left == False):
             # if the two intervals are connected
             merged_intervals[-1] = (prev_start, end, prev_left, right)
         else:
