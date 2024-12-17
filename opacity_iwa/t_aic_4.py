@@ -2485,9 +2485,10 @@ class w_aic():
                 pass
 
         if is_print_state_to_remove:
-            print("[State to remove] ---")
-            print(state_to_remove)
-            print("total: " +  str(state_to_remove.__len__()))
+            print_c("[State to remove] ---", color="bright_red", style='bold')
+            for state_t in state_to_remove:
+                print_c(state_t, color='bright_white')
+            print_c("total: " +  str(state_to_remove.__len__()), color="bright_green", style='bold')
 
 
     def is_interval_disjoint(self, t_min_1, t_max_1, t_min_2, t_max_2):
